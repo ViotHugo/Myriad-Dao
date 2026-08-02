@@ -70,7 +70,7 @@ try {
 const audio = createAudio(game.state.settings);
 const ui = createUI({
   game, view, audio, storage,
-  onQuality: (q) => view.setQuality(q === 'auto' ? undefined : q),
+  onQuality: (q) => view.setQuality(q), // 'auto' included — setQuality resolves it
 });
 
 view.setReducedMotion(game.state.settings.reducedMotion);

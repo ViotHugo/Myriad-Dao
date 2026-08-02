@@ -88,6 +88,15 @@ export function defaultState() {
 export function realmData(s) { return D.REALMS[s.realm]; }
 export function isMajor(s) { return s.stage >= D.STAGE_NAMES.length - 1; }
 
+/**
+ * Peak Immortal Ascension is the top of the ladder — there is no ninth realm to
+ * break through into. Without this the tribulation happily advances `realm` to
+ * 8, every REALMS lookup throws, and the corrupt state is autosaved.
+ */
+export function isFinalStage(s) {
+  return s.realm >= D.REALMS.length - 1 && s.stage >= D.STAGE_NAMES.length - 1;
+}
+
 /** Qi needed for the next breakthrough. A major one costs double. */
 export function breakthroughCost(s) {
   const r = D.REALMS[s.realm];
@@ -482,6 +491,9 @@ export function createGame(options = {}) {
     if (state.deviationCd > 0) {
       return { ok: false, reason: 'Your meridians are still in disarray.' };
     }
+    if (isFinalStage(state)) {
+      return { ok: false, reason: 'There is nothing above Immortal Ascension. Only the wheel remains.' };
+    }
     if (state.qi < cost) return { ok: false, reason: 'Not enough Qi.' };
     if (state.pendingTrib) return { ok: false, reason: 'A tribulation is already upon you.' };
 
@@ -535,7 +547,9 @@ export function createGame(options = {}) {
 
     spendQi(t.cost);
     const wasWithered = state.withered;
-    state.realm += 1;
+    // Belt and braces: a pendingTrib restored from an older save could still be
+    // sitting at the summit. Never index past the end of the realm table.
+    state.realm = Math.min(state.realm + 1, D.REALMS.length - 1);
     state.stage = 0;
     state.withered = false;
     if (wasWithered) state.stats.witheredCured += 1;
@@ -965,7 +979,8 @@ export function viewModel(s) {
     breakthroughCost: cost,
     progress: Math.min(1, s.qi / cost),
     capped: atCap(s),
-    canBreak: s.qi >= cost && s.deviationCd <= 0,
+    canBreak: s.qi >= cost && s.deviationCd <= 0 && !isFinalStage(s),
+    atSummit: isFinalStage(s),
 
     age: s.age,
     lifespan: lifespan(s),

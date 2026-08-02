@@ -225,13 +225,16 @@ export function createView({ canvas, onTap, onDoubleTap, settings }) {
   let vmCache = null;
   const watchdog = createWatchdog((next) => setQuality(next));
 
-  function setQuality(name) {
+  function setQuality(setting) {
+    // Accepts 'auto', a tier name, undefined or nonsense — resolveTier always
+    // lands on a real tier. Indexing TIERS directly here meant that choosing
+    // Auto in Settings threw and left the renderer half-configured.
+    const name = resolveTier(setting);
     if (name === tierName) return;
     tierName = name;
     tier = TIERS[name];
     // Geometry counts are baked at boot; what we can change live is resolution,
-    // the post pass, and how hard the swarms work.
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, tier.pixelRatio) * tier.renderScale);
+    // the post pass, and how hard the swarms work. resize() applies both.
     resize();
   }
 

@@ -109,8 +109,10 @@ export function createUI({ game, view, audio, storage, onQuality }) {
     const ready = vm.canBreak;
     el.breakBtn.hidden = tab !== 'cultivate' || minigameActive;
     el.breakBtn.disabled = !ready;
-    el.breakBtn.classList.toggle('major', vm.major);
-    if (vm.major) {
+    el.breakBtn.classList.toggle('major', vm.major && !vm.atSummit);
+    if (vm.atSummit) {
+      el.breakBtn.innerHTML = 'The summit<small>Nothing stands above Immortal Ascension. Turn the wheel.</small>';
+    } else if (vm.major) {
       const chance = E.tribulationChance(game.state);
       el.breakBtn.innerHTML = `Face the Heavenly Tribulation<small>${fmt(vm.breakthroughCost)} Qi · ${fmtPct(chance)} to endure</small>`;
     } else {
@@ -127,9 +129,11 @@ export function createUI({ game, view, audio, storage, onQuality }) {
         `<button class="pad-link" data-action="chronicles">Chronicles</button>`;
       if (html !== lastPadLinks) { el.padLinks.innerHTML = html; lastPadLinks = html; }
     }
-    el.hint.textContent = vm.capped
-      ? 'The Qi will hold no more. Something has to give.'
-      : 'Tap the mountain to gather Qi.';
+    el.hint.textContent = vm.atSummit
+      ? 'You have gone as far as this life goes.'
+      : vm.capped
+        ? 'The Qi will hold no more. Something has to give.'
+        : 'Tap the mountain to gather Qi.';
   }
 
   /* ----------------------------------------------------------- tab bodies */

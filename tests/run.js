@@ -14,8 +14,9 @@ import {
   forgeCost, rival, duelWindow, playerMight, renown, recordBonusPct,
   sectCapacity, recruitCost, facilityCost, sectIncome, shopCost, pillCost,
   offlineRate, offlineCap, insightGain, lifespan, atCap, isMajor, artifactPct,
-  lootMult, SAVE_VERSION, data as D,
+  lootMult, isFinalStage, SAVE_VERSION, data as D,
 } from '../js/engine.js';
+import { resolveTier } from '../js/view3d/quality.js';
 import { mulberry32, seededRandom } from '../js/rng.js';
 import { fmt, fmtTime } from '../js/format.js';
 
@@ -252,6 +253,53 @@ section('A2 — realms and breakthroughs');
     return r.success && g.state.realm === 1 && g.state.stage === 0;
   })());
   check('bestRealm records the deepest realm ever reached', g.state.bestRealm === 1);
+}
+
+section('A2 — the summit');
+{
+  // Regression: a tribulation at Peak Immortal Ascension used to advance realm
+  // to 8, past the end of the table. Every REALMS lookup then threw, and the
+  // corrupt state was autosaved before anything noticed.
+  const g = game();
+  grant(g, { realm: 7, stage: 3 });
+  check('Peak Immortal Ascension is the final stage', isFinalStage(g.state));
+  check('earlier stages are not the final stage', (() => {
+    g.state.stage = 2; const a = isFinalStage(g.state);
+    g.state.realm = 6; g.state.stage = 3; const b = isFinalStage(g.state);
+    grant(g, { realm: 7, stage: 3 });
+    return !a && !b;
+  })());
+  check('the view model reports the summit and refuses a breakthrough', (() => {
+    g.state.qi = qiCap(g.state);
+    const vm = viewModel(g.state);
+    return vm.atSummit === true && vm.canBreak === false;
+  })());
+  check('a breakthrough at the summit is refused, not taken', (() => {
+    g.state.qi = qiCap(g.state);
+    const r = g.beginBreakthrough();
+    return r.ok === false && g.state.realm === 7 && g.state.pendingTrib === null;
+  })());
+  check('the realm can never advance past the table', (() => {
+    const h = game();
+    grant(h, { realm: 7, stage: 3 });
+    // Force a stale tribulation, as an older save could carry.
+    h.state.pendingTrib = { chance: 1, speed: 5, cost: 0, realm: 7 };
+    h.resolveTribulation(true);
+    return h.state.realm === D.REALMS.length - 1;
+  })());
+  check('the view model still builds at the summit', (() => {
+    const h = game();
+    grant(h, { realm: 7, stage: 3 });
+    h.state.pendingTrib = { chance: 1, speed: 5, cost: 0, realm: 7 };
+    h.resolveTribulation(true);
+    const vm = viewModel(h.state);
+    return vm.realmName === 'Immortal Ascension';
+  })());
+  check('reincarnation is still offered at the summit', (() => {
+    const h = game();
+    grant(h, { realm: 7, stage: 3 });
+    return viewModel(h.state).canReincarnate === true;
+  })());
 }
 
 section('A2 — heavenly tribulation odds');
@@ -1112,6 +1160,13 @@ function importSaveSafe(store) {
 section('Architecture — purity and determinism');
 {
   check('the engine runs with no DOM present', typeof globalThis.document === 'undefined');
+  check('every quality setting resolves to a real tier', (() => {
+    // Regression: choosing Auto in Settings passed undefined through to the
+    // renderer, which indexed TIERS[undefined] and threw mid-reconfigure.
+    const names = ['low', 'medium', 'high'];
+    return ['auto', undefined, null, 'nonsense', 'low', 'medium', 'high']
+      .every((v) => names.includes(resolveTier(v)));
+  })());
   check('two games with the same seed play identically', (() => {
     const run = (seed) => {
       const g = createGame({ random: mulberry32(seed) });
