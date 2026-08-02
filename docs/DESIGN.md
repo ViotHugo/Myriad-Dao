@@ -74,7 +74,7 @@ lower-contrast than the last. That stack is the entire sense of depth in the
 composition, and it is generated at boot from seeded ridged-fractal noise — no
 heightmaps, no models.
 
-Three things make it read as ink rather than as low-poly terrain:
+Four things make it read as ink rather than as low-poly terrain:
 
 1. **A ridge dissolves upward into its own colour and downward into fog.** In
    ink-wash, the foot of a mountain drowns in *opaque* mist, it is not a hole.
@@ -87,6 +87,25 @@ Three things make it read as ink rather than as low-poly terrain:
 3. **Paper, once, over the whole frame.** Long fibres one way, a fine tooth the
    other, plus a vignette. The grain is *static* — grain that crawls per frame
    reads as video noise, not as paper.
+4. **There is something in the middle distance.** The authored camera is yawed,
+   so the band of frame between the shelf and the first range looks out at
+   roughly world x −26, z −40. That was empty sky in every realm — the eye went
+   straight from the figure to the skyline with nothing to cross. A stand of
+   pines and a shoulder of rock now sit out there in near-flat dark ink, with
+   the mist bands wrapping their bases.
+
+### Light sources need a filled core
+
+`makeGlowMaterial` is a fresnel shell: brightest at the silhouette, empty in the
+middle. That is right for an aura and wrong for anything that *is* a light. Worse,
+a flat ring viewed face-on has `dot(normal, view) ≈ 1` everywhere, so its fresnel
+term is zero across the whole ring and it renders **completely invisible**.
+
+That silently cost the game its lanterns, its forge coals, the tribulation
+shockwave, the artifact reveal ring — and the duel's closing timing ring, which
+is the entire interactive content of a duel. The material now takes a `core`
+parameter that mixes the rim term toward a solid disc; anything read as a light
+or a widget sets it.
 
 ### Colour management is deliberately off
 
@@ -125,7 +144,7 @@ dawn glows along the skyline and darkens toward the zenith.
 | Expeditions | A party leaves by the gate, walks out of the valley, and returns along the same line when the timer completes. |
 | Alchemy | Furnace plume; active buffs tint the aura. |
 | Forge | Brazier, sparks, and a reveal where the piece rises and unfolds in its own light. Immortal gets a shockwave ring and an arpeggio. Bound gear renders on the avatar. |
-| Duels | A second framing: two figures on a stone pillar above mist. The strike window is a ring closing on the rival. |
+| Duels | A second framing: two robed figures with drawn blades on a stone pillar above mist, a lit rim around the platform. The strike window is a jade target ring with a white ring closing on it; a landed strike sparks where the blades meet and rocks both figures. |
 | Age & death | Hair and beard move through four brackets of `age / lifespan`, so a 500-year-old Nascent Soul is still in his prime. Withered desaturates the world. Forced rebirth lifts the nascent soul out and away. |
 | Reincarnation | The frame runs to ink from the outside in, then reforms at dawn. |
 
@@ -148,6 +167,19 @@ Two things worth knowing:
   lift it into the strip the player can still see, and approaches from the side
   so the foreground cliff does not occlude it. "The camera moves to the sect"
   has to actually be true.
+
+### Cinematic mode
+
+A set piece owns the screen. `setCinematic(true)` hides the sheet and the
+cultivate pad and stops the tab bar inviting a tap; the tribulation, the duel,
+the forge reveal and the wheel all use it.
+
+This is not cosmetic. Before it existed the forge reveal played *behind its own
+modal scrim* — a 78%-opaque blurred backdrop over the artifact it was revealing —
+and the duel arena played behind the still-open Journey sheet. The two moments
+the game most wants you to look at were the two you could not see. The reveal
+card is now a bottom sheet with no backdrop, so the piece rises in clear space
+above it.
 
 ---
 
@@ -180,7 +212,12 @@ disciples from one lathe profile in an `InstancedMesh`.
 ### Quality tiers
 
 Auto-detected from `deviceMemory`, `hardwareConcurrency`, `devicePixelRatio` and
-pointer coarseness; overridable in Settings.
+pointer coarseness; overridable in Settings. Tier changes are **live**: anything
+baked into geometry (ridge layers, mist bands, mote and spark counts, instanced
+disciple capacity, water) is rebuilt by disposing the four scene groups and
+regenerating them, which costs a few milliseconds because it is all procedural.
+A change requested during a set piece is deferred until the animation finishes,
+so a tier switch can never tear down a tribulation mid-strike.
 
 | | Low | Medium | High |
 |---|---|---|---|
@@ -193,9 +230,10 @@ pointer coarseness; overridable in Settings.
 | Instanced disciples | 8 | 16 | 24 |
 | Water | off | on | on |
 
-A watchdog samples frame times and steps the tier **down** once if p90 misses
-the floor. It never steps back up on its own — oscillating quality is worse than
-a low tier.
+A watchdog samples frame times and moves the tier to fit the device: **down** on
+a single bad window, **up** only after three consecutive comfortable ones and at
+most twice. Once it has been forced down it stops trying to climb, so a device
+sitting on the boundary settles instead of flapping.
 
 The post stack is deliberately one pass: paper grain, vignette, storm darkening,
 ink dissolve, flash. No bloom. Glow is done with additive fresnel shells and
@@ -299,12 +337,30 @@ and it is implemented exactly as specified.
 
 ---
 
-## 7. Known gaps
+## 7. How the visuals are checked
 
-- The forge, duel and rebirth sequences are staged with procedural props and
-  camera moves rather than authored animation; they read correctly but are the
-  least polished of the set pieces.
-- Quality tiers change resolution, the post pass and swarm sizes live; geometry
-  counts (ridge layers, mist bands, instance capacity) are baked at boot, so a
-  tier change mid-session does not rebuild them. A reload picks them up.
-- The watchdog only steps down, never up.
+Rendering bugs do not show up in unit tests — every one of the faults above
+passed 231 green checks while being plainly wrong on screen. They are found by
+looking. `tools/` has no screenshot harness (it would need a browser in CI), but
+the working method is worth writing down:
+
+1. Drive the real build in headless Chromium at a phone viewport.
+2. Capture every realm, every sect tier, each set piece, and the withered state.
+3. Tile them into one montage and look at them side by side — a realm that has
+   gone flat, or a set piece rendering behind its own UI, is obvious in a grid
+   and invisible one screenshot at a time.
+4. When something looks wrong, **project the geometry to screen coordinates and
+   read the numbers** rather than guessing. Every placement bug in this build
+   was solved that way: the ridges that were back-face culled, the sect hidden
+   behind the foreground cliff, the pine at x=−7.4 that projected to screen
+   x=−482, the moon sitting just above the top of frame.
+
+## 8. Known gaps
+
+- The rebirth sequence is an ink wipe and a camera move; the nascent soul
+  lifting out of the body is a single glowing sphere on a spline, not authored
+  animation.
+- Expedition parties walk a straight line out of the gate and back rather than
+  following the terrain.
+- The `close` framing used by the Arts tab is a tighter version of the world
+  shot; it does not yet show the meridian constellation as its own composition.

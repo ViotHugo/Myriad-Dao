@@ -6,11 +6,11 @@ your sect grows in the valley below, and every number in the game is something
 you can see out there.
 
 Vanilla ES modules and one vendored copy of Three.js. No build step, no
-framework, no downloaded art. **~978 KB total**, and installable as a PWA.
+framework, no downloaded art. **~992 KB total**, and installable as a PWA.
 
 ```bash
 npm run serve     # http://localhost:8123
-npm test          # 223 engine checks
+npm test          # 237 engine checks
 npm run balance   # assert the A18 pacing table
 ```
 
@@ -41,7 +41,7 @@ js/audio.js           synthesised WebAudio
 js/view3d/            Three.js: shaders, world, avatar, sect, effects, camera
 tools/balance-sim.js  plays the engine headlessly, checks pacing
 tools/make-icons.js   regenerates the PWA icons
-tests/run.js          223 checks
+tests/run.js          237 checks
 docs/DESIGN.md        art direction, performance budget, quality tiers, balance
 ```
 
@@ -51,9 +51,9 @@ working, the engine has picked up a dependency it should not have.
 ## Docs
 
 [`docs/DESIGN.md`](docs/DESIGN.md) covers the ink-wash rendering approach, the
-draw-call and download budgets, the three quality tiers, save migration, and the
-two places where the v0.4 feature inventory disagrees with itself (and what this
-build does about each).
+draw-call and download budgets, the three quality tiers, save migration, how the
+visuals are checked, and the two places where the v0.4 feature inventory
+disagrees with itself (and what this build does about each).
 
 ## Deploying
 

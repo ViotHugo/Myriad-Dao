@@ -71,13 +71,21 @@ export function resolveTier(setting) {
   return detectTier();
 }
 
+const ORDER = ['low', 'medium', 'high'];
+
 /**
- * Watches frame times and steps the tier down if the device cannot hold up.
- * It never steps back up on its own — oscillating quality is worse than low.
+ * Watches frame times and moves the tier to fit the device.
+ *
+ * Downgrades happen on one bad window; upgrades need several consecutive good
+ * ones and stop after a couple of attempts, so a device that sits near the
+ * boundary settles instead of flapping between tiers forever.
  */
-export function createWatchdog(onDowngrade) {
+export function createWatchdog(onChange) {
   let samples = [];
-  let cooldown = 180; // ignore the first few seconds of warm-up and compiles
+  let cooldown = 180;   // ignore warm-up and shader compiles
+  let goodRuns = 0;
+  let upgradesLeft = 2;
+
   return function sample(dt, tier) {
     if (cooldown > 0) { cooldown--; return; }
     samples.push(dt);
@@ -85,7 +93,30 @@ export function createWatchdog(onDowngrade) {
     const sorted = samples.slice().sort((a, b) => a - b);
     const p90 = sorted[Math.floor(sorted.length * 0.9)];
     samples = [];
-    if (p90 > 1 / 26 && tier === 'high') onDowngrade('medium');
-    else if (p90 > 1 / 22 && tier === 'medium') onDowngrade('low');
+
+    const idx = ORDER.indexOf(tier);
+    if (idx < 0) return;
+
+    // Too slow: drop a tier immediately and stop trying to climb back.
+    if ((p90 > 1 / 26 && tier === 'high') || (p90 > 1 / 22 && tier === 'medium')) {
+      goodRuns = 0;
+      upgradesLeft = 0;
+      cooldown = 240;
+      onChange(ORDER[idx - 1]);
+      return;
+    }
+
+    // Comfortably fast for three windows running, and we have not already spent
+    // our upgrade attempts: try one tier up.
+    if (p90 < 1 / 55 && idx < ORDER.length - 1 && upgradesLeft > 0) {
+      if (++goodRuns >= 3) {
+        goodRuns = 0;
+        upgradesLeft--;
+        cooldown = 240;
+        onChange(ORDER[idx + 1]);
+      }
+      return;
+    }
+    goodRuns = 0;
   };
 }

@@ -134,7 +134,7 @@ export function createAvatar(env, tier) {
   aura.position.y = 0.72;
   group.add(aura);
 
-  const haloMat = makeGlowMaterial(env, { color: '#ffd76a', power: 1.6, strength: 0 });
+  const haloMat = makeGlowMaterial(env, { color: '#ffd76a', power: 1.6, strength: 0, core: 0.7 });
   const halo = new THREE.Mesh(new THREE.TorusGeometry(0.44, 0.035, 8, 40), haloMat);
   halo.position.set(0, 1.42, -0.16);
   halo.visible = false;
@@ -161,7 +161,7 @@ export function createAvatar(env, tier) {
 
   /* ------------------------------------------------------ the twelve gates */
 
-  const meridianMat = makeGlowMaterial(env, { color: '#8fd8c0', power: 1.4, strength: 1.1 });
+  const meridianMat = makeGlowMaterial(env, { color: '#8fd8c0', power: 1.4, strength: 1.1, core: 1 });
   const meridianGeo = new THREE.SphereGeometry(0.045, 8, 6);
   const meridians = new THREE.InstancedMesh(meridianGeo, meridianMat, 12);
   meridians.instanceMatrix.setUsage(THREE.DynamicDrawUsage);

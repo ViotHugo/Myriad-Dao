@@ -10,10 +10,15 @@ import {
   makeRuneRingMaterial,
 } from './shaders.js';
 
+// A standing cultivator in profile: flared hem, waist, shoulders, a pinched
+// neck and a distinct head. The previous profile tapered smoothly to a point
+// and read as a chess pawn at duel distance.
 const FIGURE_PROFILE = [
-  new THREE.Vector2(0.001, 0.00), new THREE.Vector2(0.20, 0.04), new THREE.Vector2(0.185, 0.44),
-  new THREE.Vector2(0.135, 0.62), new THREE.Vector2(0.065, 0.68), new THREE.Vector2(0.105, 0.77),
-  new THREE.Vector2(0.085, 0.86), new THREE.Vector2(0.001, 0.89),
+  new THREE.Vector2(0.001, 0.00), new THREE.Vector2(0.26, 0.03), new THREE.Vector2(0.235, 0.20),
+  new THREE.Vector2(0.165, 0.42), new THREE.Vector2(0.150, 0.56), new THREE.Vector2(0.205, 0.66),
+  new THREE.Vector2(0.190, 0.74), new THREE.Vector2(0.070, 0.78), new THREE.Vector2(0.062, 0.82),
+  new THREE.Vector2(0.115, 0.86), new THREE.Vector2(0.120, 0.94), new THREE.Vector2(0.085, 0.99),
+  new THREE.Vector2(0.001, 1.01),
 ];
 
 export const DUEL_ANCHOR = new THREE.Vector3(26, -5, -14);
@@ -27,7 +32,7 @@ export function createEffects(env, tier) {
 
   // A pool of expanding rings. Reused, never allocated during play.
   const RIPPLES = 6;
-  const rippleMat = makeGlowMaterial(env, { color: '#35c98e', power: 1.0, strength: 1.4 });
+  const rippleMat = makeGlowMaterial(env, { color: '#35c98e', power: 1.0, strength: 1.4, core: 0.55 });
   const ripples = [];
   for (let i = 0; i < RIPPLES; i++) {
     const m = new THREE.Mesh(new THREE.RingGeometry(0.86, 1.0, 28, 1), rippleMat.clone());
@@ -105,7 +110,7 @@ export function createEffects(env, tier) {
   group.add(tribRing);
 
   // Success: a shockwave along the ground and a beam to the heavens.
-  const shockMat = makeGlowMaterial(env, { color: '#e8b34b', power: 0.8, strength: 2.0 });
+  const shockMat = makeGlowMaterial(env, { color: '#e8b34b', power: 0.8, strength: 2.0, core: 0.7 });
   const shock = new THREE.Mesh(new THREE.RingGeometry(0.9, 1.0, 44, 1), shockMat);
   shock.rotation.x = -Math.PI / 2;
   shock.position.y = 0.2;
@@ -133,7 +138,7 @@ export function createEffects(env, tier) {
   anvil.position.set(0.95, 0.14, 0);
   forge.add(anvil);
 
-  const coalMat = makeGlowMaterial(env, { color: '#ff7a2b', power: 1.0, strength: 1.6 });
+  const coalMat = makeGlowMaterial(env, { color: '#ff7a2b', power: 1.0, strength: 1.5, core: 1 });
   const coals = new THREE.Mesh(new THREE.SphereGeometry(0.34, 10, 8), coalMat);
   coals.position.y = 0.5;
   coals.scale.y = 0.4;
@@ -163,12 +168,12 @@ export function createEffects(env, tier) {
   reveal.visible = false;
   forge.add(reveal);
 
-  const revealGlowMat = makeGlowMaterial(env, { color: '#8e9099', power: 1.4, strength: 0 });
+  const revealGlowMat = makeGlowMaterial(env, { color: '#8e9099', power: 1.4, strength: 0, core: 0.55 });
   const revealGlow = new THREE.Mesh(new THREE.SphereGeometry(0.9, 14, 10), revealGlowMat);
   revealGlow.visible = false;
   forge.add(revealGlow);
 
-  const revealRing = new THREE.Mesh(new THREE.RingGeometry(0.9, 1.05, 40, 1), makeGlowMaterial(env, { color: '#e8b34b', power: 0.8, strength: 1.6 }));
+  const revealRing = new THREE.Mesh(new THREE.RingGeometry(0.9, 1.05, 40, 1), makeGlowMaterial(env, { color: '#e8b34b', power: 0.8, strength: 1.6, core: 1 }));
   revealRing.rotation.x = -Math.PI / 2;
   revealRing.visible = false;
   forge.add(revealRing);
@@ -180,52 +185,94 @@ export function createEffects(env, tier) {
   duel.visible = false;
   group.add(duel);
 
-  const platMat = makeInkMaterial(env, { color: '#333a44', rim: 0.5, bands: 3, flat: true });
+  const platMat = makeInkMaterial(env, { color: '#2b323c', rim: 0.7, bands: 3, flat: true });
   const platform = new THREE.Mesh(new THREE.CylinderGeometry(4.6, 5.6, 1.6, 9, 1), platMat);
   duel.add(platform);
   const pillar = new THREE.Mesh(new THREE.CylinderGeometry(5.2, 3.0, 26, 9, 1), platMat);
   pillar.position.y = -13.6;
   duel.add(pillar);
+  // A rim of light around the platform edge so it reads as a stage rather than
+  // a grey band, and a few standing stones for scale.
+  const platRim = new THREE.Mesh(
+    new THREE.TorusGeometry(4.62, 0.06, 6, 40),
+    makeGlowMaterial(env, { color: '#8fd8c0', power: 1.4, strength: 0.8, core: 0.6 }),
+  );
+  platRim.rotation.x = Math.PI / 2;
+  platRim.position.y = 0.8;
+  duel.add(platRim);
+  for (let i = 0; i < 5; i++) {
+    const a = (i / 5) * Math.PI * 2 + 0.4;
+    const st = new THREE.Mesh(new THREE.ConeGeometry(0.26, 1.1 + (i % 3) * 0.5, 5, 1), platMat);
+    st.position.set(Math.cos(a) * 4.1, 1.2, Math.sin(a) * 4.1 - 1.2);
+    duel.add(st);
+  }
 
-  const rivalMat = makeInkMaterial(env, { color: '#7a2f3a', rim: 0.9, bands: 3 });
-  const rivalGeo = new THREE.LatheGeometry(FIGURE_PROFILE, 10);
-  rivalGeo.scale(1.9, 1.9, 1.9);
+  const rivalMat = makeInkMaterial(env, { color: '#6e2b34', rim: 1.3, bands: 3 });
+  const rivalGeo = new THREE.LatheGeometry(FIGURE_PROFILE, 14);
+  rivalGeo.scale(2.15, 2.15, 2.15);
   const rivalFigure = new THREE.Mesh(rivalGeo, rivalMat);
-  rivalFigure.position.set(1.9, 0.8, 0);
+  rivalFigure.position.set(1.75, 0.8, 0);
   duel.add(rivalFigure);
 
-  const meMat = makeInkMaterial(env, { color: '#2f6b63', rim: 0.9, bands: 3 });
+  const meMat = makeInkMaterial(env, { color: '#2f6b63', rim: 1.3, bands: 3 });
   const meFigure = new THREE.Mesh(rivalGeo, meMat);
-  meFigure.position.set(-1.9, 0.8, 0);
+  meFigure.position.set(-1.75, 0.8, 0);
   duel.add(meFigure);
+
+  // Each carries a blade, so a clash has something to be made of.
+  const bladeGeo = new THREE.CylinderGeometry(0.02, 0.07, 1.5, 4, 1);
+  bladeGeo.rotateY(Math.PI / 4);
+  bladeGeo.scale(1, 1, 0.32);
+  const meBlade = new THREE.Mesh(bladeGeo, makeInkMaterial(env, { color: '#9fd8c8', rim: 1.5, bands: 3, emissive: 0.35 }));
+  meBlade.position.set(-1.05, 1.9, 0.5);
+  meBlade.rotation.z = -0.7;
+  duel.add(meBlade);
+  const rivalBlade = new THREE.Mesh(bladeGeo, makeInkMaterial(env, { color: '#e0a0a8', rim: 1.5, bands: 3, emissive: 0.35 }));
+  rivalBlade.position.set(1.05, 1.9, 0.5);
+  rivalBlade.rotation.z = 0.7;
+  duel.add(rivalBlade);
+
+  // The spark where the two blades meet on a landed strike.
+  const clashSparkMat = makeGlowMaterial(env, { color: '#ffe9a8', power: 1.2, strength: 0, core: 1 });
+  const clashSpark = new THREE.Mesh(new THREE.SphereGeometry(0.5, 10, 8), clashSparkMat);
+  clashSpark.position.set(0, 2.1, 0.5);
+  clashSpark.visible = false;
+  duel.add(clashSpark);
 
   // The strike window: a ring that closes on the rival. Its *time* inside the
   // band is the engine's window fraction, so the picture is the probability.
-  const clashMat = makeGlowMaterial(env, { color: '#e8b34b', power: 0.9, strength: 1.8 });
-  const clashRing = new THREE.Mesh(new THREE.RingGeometry(0.94, 1.0, 40, 1), clashMat);
-  clashRing.position.set(1.9, 1.5, 0.6);
+  // The timing widget faces the camera head-on: without a filled core the
+  // fresnel term is zero across the whole ring and the duel's one piece of
+  // gameplay is invisible.
+  const clashMat = makeGlowMaterial(env, { color: '#e8b34b', power: 0.9, strength: 1.8, core: 1 });
+  const clashRing = new THREE.Mesh(new THREE.RingGeometry(0.94, 1.0, 48, 1), clashMat);
+  clashRing.position.set(1.75, 1.9, 0.9);
   clashRing.visible = false;
+  clashRing.renderOrder = 12;
   duel.add(clashRing);
 
   const clashTarget = new THREE.Mesh(
     new THREE.RingGeometry(0.94, 1.0, 40, 1),
-    makeGlowMaterial(env, { color: '#35c98e', power: 0.9, strength: 1.0 }),
+    makeGlowMaterial(env, { color: '#35c98e', power: 0.9, strength: 1.0, core: 1 }),
   );
   clashTarget.position.copy(clashRing.position);
   clashTarget.visible = false;
+  clashTarget.renderOrder = 11;
   duel.add(clashTarget);
 
+  // Its top edge has to stay below the platform, or the band reads as a floor
+  // line cutting the fighters off at the waist.
   const duelMist = new THREE.Mesh(
-    new THREE.PlaneGeometry(60, 18, 12, 2),
-    makeMistMaterial(env, { color: '#8d99a8', opacity: 0.3, speed: 0.05 }),
+    new THREE.PlaneGeometry(72, 14, 14, 2),
+    makeMistMaterial(env, { color: '#8d99a8', opacity: 0.34, speed: 0.05 }),
   );
-  duelMist.position.set(0, -6, -6);
+  duelMist.position.set(0, -9, -7);
   duel.add(duelMist);
 
   /* ============================================================= rebirth */
 
   // The nascent soul leaving a body that has run out of years.
-  const soulMat = makeGlowMaterial(env, { color: '#9fd8ff', power: 1.5, strength: 0 });
+  const soulMat = makeGlowMaterial(env, { color: '#9fd8ff', power: 1.5, strength: 0, core: 1 });
   const soul = new THREE.Mesh(new THREE.SphereGeometry(0.34, 12, 10), soulMat);
   soul.visible = false;
   group.add(soul);
@@ -240,6 +287,7 @@ export function createEffects(env, tier) {
     duelRing: null,
     soul: null,
     forgeHot: 0,
+    clashSpark: 0,
   };
 
   /* --------------------------------------------------------------- API */
@@ -315,18 +363,33 @@ export function createEffects(env, tier) {
     clashTarget.visible = active;
     if (!active) return;
     // The band sits at the end of the sweep; its width in time is `windowFrac`.
+    // Sized against the figures, not the frame: the ring has to close on the
+    // rival's guard, not sweep across the whole screen.
     const bandStart = 1 - windowFrac;
-    clashTarget.scale.setScalar(THREE.MathUtils.lerp(2.6, 0.75, bandStart));
-    clashRing.scale.setScalar(THREE.MathUtils.lerp(2.6, 0.75, progress));
+    clashTarget.scale.setScalar(THREE.MathUtils.lerp(1.55, 0.45, bandStart));
+    clashRing.scale.setScalar(THREE.MathUtils.lerp(1.55, 0.45, progress));
     const inside = progress >= bandStart;
     clashMat.uniforms.uColor.value.set(inside ? '#ffe9a8' : '#e8b34b');
   }
 
   function knockback(won) {
-    rivalFigure.position.x = won ? 2.9 : 1.6;
-    meFigure.position.x = won ? -1.6 : -2.9;
-    rivalFigure.rotation.z = won ? 0.35 : 0;
-    meFigure.rotation.z = won ? 0 : -0.35;
+    rivalFigure.position.x = won ? 2.8 : 1.55;
+    meFigure.position.x = won ? -1.55 : -2.8;
+    rivalFigure.rotation.z = won ? 0.45 : 0;
+    meFigure.rotation.z = won ? 0 : -0.45;
+    clashSpark.visible = true;
+    clashSparkMat.uniforms.uStrength.value = 2.4;
+    anim.clashSpark = 1;
+  }
+
+  /** A landed strike: blades meet, a spark, both figures rock back. */
+  function clashImpact(hit) {
+    clashSpark.visible = true;
+    clashSparkMat.uniforms.uStrength.value = hit ? 3.0 : 0.8;
+    clashSparkMat.uniforms.uColor.value.set(hit ? '#ffe9a8' : '#7a8794');
+    anim.clashSpark = 1;
+    meFigure.rotation.z = hit ? -0.18 : 0.14;
+    rivalFigure.rotation.z = hit ? 0.22 : -0.12;
   }
 
   function liftSoul(from = new THREE.Vector3(0, 1.2, 0)) {
@@ -415,6 +478,16 @@ export function createEffects(env, tier) {
       meFigure.position.y = 0.8 + Math.sin(t * 1.6 + 1) * 0.03;
       rivalFigure.rotation.z *= 1 - dt * 2;
       meFigure.rotation.z *= 1 - dt * 2;
+      meBlade.position.set(-1.05, 1.9 + Math.sin(t * 2.1) * 0.05, 0.5);
+      rivalBlade.position.set(1.05, 1.9 + Math.sin(t * 2.1 + 1.4) * 0.05, 0.5);
+      meBlade.rotation.z = -0.7 + Math.sin(t * 1.3) * 0.06;
+      rivalBlade.rotation.z = 0.7 - Math.sin(t * 1.3 + 0.7) * 0.06;
+    }
+    if (anim.clashSpark > 0) {
+      anim.clashSpark -= dt * 1.8;
+      clashSparkMat.uniforms.uStrength.value = Math.max(0, anim.clashSpark * 3.0);
+      clashSpark.scale.setScalar(0.6 + (1 - anim.clashSpark) * 1.9);
+      if (anim.clashSpark <= 0) clashSpark.visible = false;
     }
 
     if (anim.soul) {
@@ -430,7 +503,7 @@ export function createEffects(env, tier) {
     group, trib, forge, duel,
     ripple, beginTribulation, endTribulation, strikeBolt, setTribMarker,
     showForge, revealArtifact, hideReveal,
-    showDuel, setClash, knockback, liftSoul,
+    showDuel, setClash, knockback, clashImpact, liftSoul,
     setPalette, update,
   };
 }

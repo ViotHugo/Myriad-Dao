@@ -200,27 +200,43 @@ export function makeSkyMaterial(env) {
 
         // The great moon of Spirit Severing.
         if (uMoon > 0.0) {
-          vec3 md = normalize(vec3(-0.45, 0.42, -0.78));
+          // Low enough to sit inside the authored frame, and small enough to
+          // read as a moon rather than a blown-out lamp.
+          // Low enough to rise from behind the far ranges, and with a halo
+          // tight enough to read as a moon instead of an overexposed lamp.
+          vec3 md = normalize(vec3(-0.52, 0.062, -0.86));
           float dd = distance(d, md);
-          float disc = smoothstep(0.16, 0.135, dd);
-          float halo = smoothstep(0.55, 0.0, dd) * 0.25;
-          col = mix(col, vec3(0.96, 0.94, 0.86), disc * uMoon);
-          col += vec3(0.7, 0.75, 0.8) * halo * uMoon;
+          float disc = smoothstep(0.048, 0.036, dd);
+          float rim  = smoothstep(0.060, 0.046, dd) - disc;
+          float halo = smoothstep(0.185, 0.0, dd);
+          col += vec3(0.52, 0.58, 0.70) * halo * halo * 0.20 * uMoon;
+          col = mix(col, vec3(0.80, 0.80, 0.74), disc * 0.85 * uMoon);
+          col += vec3(0.26, 0.29, 0.34) * rim * uMoon;
         }
 
         // Aurora: vertical curtains of accent light, slowly breathing.
         if (uAurora > 0.0) {
-          float band = fbm(vec2(d.x * 3.0 + uTime * 0.05, d.y * 2.0 - uTime * 0.02));
-          float curtain = smoothstep(0.45, 0.85, band) * smoothstep(-0.05, 0.55, d.y);
-          col += uAccent * curtain * 0.55 * uAurora;
-          col += vec3(0.35, 0.75, 0.95) * curtain * 0.2 * uAurora;
+          // Curtains hang from just above the skyline into the low sky — the
+          // band the player can actually see — and fade out before the zenith.
+          float band = fbm(vec2(d.x * 3.4 + uTime * 0.05, d.y * 5.0 - uTime * 0.02));
+          float height = smoothstep(0.01, 0.10, d.y) * smoothstep(0.62, 0.20, d.y);
+          float curtain = smoothstep(0.40, 0.80, band) * height;
+          float ripple = 0.65 + 0.35 * sin(d.x * 22.0 + uTime * 0.5);
+          col += uAccent * curtain * 0.85 * ripple * uAurora;
+          col += vec3(0.30, 0.70, 0.95) * curtain * 0.35 * uAurora;
         }
 
         // The golden sea of clouds at Immortal Ascension.
         if (uCloudSea > 0.0) {
-          float band = fbm(vec2(d.x * 2.2 + uTime * 0.015, d.z * 2.2)) ;
-          float sea = smoothstep(0.35, 0.0, abs(d.y - 0.02)) * band;
-          col = mix(col, vec3(1.0, 0.82, 0.45), sea * 0.75 * uCloudSea);
+          // Billows below the skyline, bright rims where they catch the light,
+          // so the sea reads as cloud and not as more sky.
+          vec2 cp = vec2(d.x, d.z) / max(abs(d.y) + 0.06, 0.06);
+          float billow = fbm(cp * 0.9 + vec2(uTime * 0.012, 0.0));
+          float below = smoothstep(0.10, -0.16, d.y);
+          float sea = below * smoothstep(0.30, 0.72, billow);
+          float crest = below * smoothstep(0.60, 0.80, billow);
+          col = mix(col, vec3(0.92, 0.72, 0.36), sea * 0.85 * uCloudSea);
+          col += vec3(1.0, 0.93, 0.68) * crest * 0.40 * uCloudSea;
         }
 
         // Tribulation: the sky is swallowed and lit only by what is coming.
@@ -372,9 +388,12 @@ export function makeMistMaterial(env, { color = '#8d99a8', opacity = 0.16, speed
       ${NOISE}
       varying vec2 vUv;
       void main() {
-        float n = fbm(vec2(vUv.x * 4.0 + uTime * uSpeed, vUv.y * 2.5));
-        float edge = smoothstep(0.0, 0.35, vUv.y) * smoothstep(1.0, 0.6, vUv.y);
-        float sides = smoothstep(0.0, 0.18, vUv.x) * smoothstep(1.0, 0.82, vUv.x);
+        // Two octaves at different rates so the band billows and separates
+        // instead of reading as one flat sheet of grey.
+        float n = fbm(vec2(vUv.x * 7.0 + uTime * uSpeed, vUv.y * 3.0));
+        n = smoothstep(0.30, 0.72, n) * 0.85 + n * 0.15;
+        float edge = smoothstep(0.0, 0.30, vUv.y) * smoothstep(1.0, 0.55, vUv.y);
+        float sides = smoothstep(0.0, 0.14, vUv.x) * smoothstep(1.0, 0.86, vUv.x);
         float a = n * edge * sides * uOpacity;
         vec3 col = mix(uColor, vec3(dot(uColor, vec3(0.299, 0.587, 0.114))), uDesat);
         gl_FragColor = vec4(col, a);
@@ -386,7 +405,13 @@ export function makeMistMaterial(env, { color = '#8d99a8', opacity = 0.16, speed
 /* ----------------------------------------------------------------- glow */
 
 /** Additive fresnel shell — auras, halos, the qi column, artifact light. */
-export function makeGlowMaterial(env, { color = '#35c98e', power = 2.2, strength = 0.9 } = {}) {
+export function makeGlowMaterial(env, {
+  color = '#35c98e', power = 2.2, strength = 0.9,
+  // A fresnel shell is right for an aura and wrong for a light source: it is
+  // brightest at the silhouette and empty in the middle, so lanterns and coals
+  // came out as rings. `core` fills the centre back in.
+  core = 0,
+} = {}) {
   return new THREE.ShaderMaterial({
     transparent: true,
     depthWrite: false,
@@ -397,6 +422,7 @@ export function makeGlowMaterial(env, { color = '#35c98e', power = 2.2, strength
       uPower: { value: power },
       uStrength: { value: strength },
       uPulse: { value: 0 },
+      uCore: { value: core },
     }),
     vertexShader: /* glsl */ `
       varying vec3 vNormalW;
@@ -413,16 +439,19 @@ export function makeGlowMaterial(env, { color = '#35c98e', power = 2.2, strength
     `,
     fragmentShader: /* glsl */ `
       uniform vec3 uColor;
-      uniform float uPower, uStrength, uPulse, uTime, uDesat;
+      uniform float uPower, uStrength, uPulse, uTime, uDesat, uCore;
       varying vec3 vNormalW;
       varying vec3 vViewDir;
       varying vec2 vUv;
       void main() {
-        float f = pow(1.0 - abs(dot(normalize(vNormalW), normalize(vViewDir))), uPower);
+        float facing = abs(dot(normalize(vNormalW), normalize(vViewDir)));
+        float f = pow(1.0 - facing, uPower);
+        // Mix the rim term toward a solid disc as uCore rises.
+        f = mix(f, max(f, pow(facing, 0.6)), uCore);
         float pulse = 1.0 + uPulse * sin(uTime * 3.0) * 0.35;
         vec3 col = uColor * f * uStrength * pulse;
         col = mix(col, vec3(dot(col, vec3(0.299, 0.587, 0.114))), uDesat * 0.7);
-        gl_FragColor = vec4(col, f * uStrength * pulse);
+        gl_FragColor = vec4(col, clamp(f * uStrength * pulse, 0.0, 1.0));
       }
     `,
   });
@@ -594,11 +623,14 @@ export function makePostMaterial() {
         float v = distance(vUv, vec2(0.5));
         col *= mix(1.0, smoothstep(0.92, 0.30, v), uVignette);
 
-        // Rebirth: the world runs to ink from the outside in.
+        // Rebirth: the world runs to ink from the outside in. The edge term is 1
+        // at the centre and 0 in the corners, so the wipe closes inward, with a
+        // little noise on the front so it reads as ink and not as an iris.
         if (uDissolve > 0.0) {
-          float edge = fbm(vUv * 5.0 + uTime * 0.1) * 0.35 + v * 1.1;
-          col = mix(col, uInk, clamp(smoothstep(uDissolve - 0.25, uDissolve + 0.05, 1.0 - edge + uDissolve), 0.0, 1.0) * step(0.001, uDissolve));
-          col = mix(col, uInk, smoothstep(0.75, 1.0, uDissolve));
+          float n = fbm(vUv * 4.0 + uTime * 0.05) * 0.28;
+          float edge = 1.0 - clamp(v / 0.72, 0.0, 1.0);
+          float t = smoothstep(edge - 0.20, edge + 0.08, uDissolve * (1.0 + n));
+          col = mix(col, uInk, clamp(t, 0.0, 1.0));
         }
 
         col = mix(col, uFlashColor, clamp(uFlash, 0.0, 1.0));

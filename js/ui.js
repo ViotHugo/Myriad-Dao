@@ -31,6 +31,20 @@ export function createUI({ game, view, audio, storage, onQuality }) {
   let vm = game.viewModel();
   let duelRun = null;
   let tribRun = null;
+  let cinematic = false;
+
+  /**
+   * A set piece owns the screen. Without this the forge reveal plays behind its
+   * own modal scrim and the duel arena plays behind the Journey sheet — the two
+   * moments the game most wants you to look at were the two you could not see.
+   */
+  function setCinematic(on) {
+    cinematic = on;
+    el.sheet.hidden = on || tab === 'cultivate';
+    el.pad.hidden = on;
+    el.tabs.classList.toggle('is-dimmed', on);
+    if (!on) renderSheet(true);
+  }
 
   /* ------------------------------------------------------------- helpers */
 
@@ -104,7 +118,7 @@ export function createUI({ game, view, audio, storage, onQuality }) {
 
     // A minigame owns the screen and the tap: nothing else may compete for
     // either, or the player breaks through instead of striking.
-    const minigameActive = !!tribRun || !!duelRun;
+    const minigameActive = !!tribRun || !!duelRun || cinematic;
     el.pad.hidden = minigameActive;
     const ready = vm.canBreak;
     el.breakBtn.hidden = tab !== 'cultivate' || minigameActive;
@@ -420,7 +434,7 @@ export function createUI({ game, view, audio, storage, onQuality }) {
   let lastSignature = null;
 
   function renderSheet(force = false) {
-    if (tab === 'cultivate') { el.sheet.hidden = true; lastSignature = null; return; }
+    if (tab === 'cultivate' || cinematic) { el.sheet.hidden = true; lastSignature = null; return; }
     const sig = sheetSignature();
     el.sheet.hidden = false;
     el.sheet.classList.toggle('compact', tab === 'sect');
@@ -477,8 +491,9 @@ export function createUI({ game, view, audio, storage, onQuality }) {
 
   function closeModal() { el.modal.hidden = true; el.modal.innerHTML = ''; }
 
-  function openModal(html, { dismissable = true } = {}) {
+  function openModal(html, { dismissable = true, variant = '' } = {}) {
     el.modal.hidden = false;
+    el.modal.className = `modal${variant ? ' ' + variant : ''}`;
     el.modal.innerHTML = `<div class="modal-box">${html}</div>`;
     el.modal.dataset.dismissable = dismissable ? '1' : '0';
   }
@@ -558,13 +573,14 @@ export function createUI({ game, view, audio, storage, onQuality }) {
       <div class="card-actions">
         <button class="act" data-action="bind">Bind it</button>
         <button class="act plain" data-action="salvage">Salvage · 💠 2</button>
-      </div>`, { dismissable: false });
+      </div>`, { dismissable: false, variant: 'reveal' });
   }
 
   /* ------------------------------------------------------- the minigames */
 
   function beginTribulation(info) {
     tribRun = { active: true };
+    setCinematic(true);
     view.startTribulation(info.chance, info.speed);
     el.overlay.hidden = false;
     el.overlay.innerHTML = `<div class="overlay-note trib">
@@ -581,7 +597,7 @@ export function createUI({ game, view, audio, storage, onQuality }) {
     tribRun = null;
     el.overlay.hidden = true;
     el.overlay.innerHTML = '';
-    el.pad.hidden = false;
+    setCinematic(false);
     const out = game.resolveTribulation(r.hit);
     if (out.success) {
       audio.ascend();
@@ -595,6 +611,7 @@ export function createUI({ game, view, audio, storage, onQuality }) {
   }
 
   function beginDuel(info) {
+    setCinematic(true);
     view.showDuel(true);
     view.setFraming('duel');
     duelRun = { round: 0, wins: 0, info, waiting: false, timer: 0 };
@@ -632,8 +649,19 @@ export function createUI({ game, view, audio, storage, onQuality }) {
     duelRun = null;
     view.endClash();
     el.overlay.hidden = true;
-    el.pad.hidden = false;
     const out = game.resolveDuel(wins);
+
+    // The engine can legitimately refuse: a forced death mid-duel wipes the
+    // in-flight duel out of state. Bail cleanly rather than reading a rival
+    // that is not there.
+    if (!out.ok) {
+      view.showDuel(false);
+      setCinematic(false);
+      view.setFraming(TAB_FRAMING[tab] || 'world');
+      refresh();
+      return;
+    }
+
     view.knockback(out.won);
     if (out.won) {
       audio.victory();
@@ -642,7 +670,11 @@ export function createUI({ game, view, audio, storage, onQuality }) {
       audio.defeat();
       toast(`${out.rival.name} puts you down. Injured for 90s.`, 'bad');
     }
-    setTimeout(() => { view.showDuel(false); view.setFraming(TAB_FRAMING[tab] || 'world'); }, 2200);
+    setTimeout(() => {
+      view.showDuel(false);
+      setCinematic(false);
+      view.setFraming(TAB_FRAMING[tab] || 'world');
+    }, 2400);
     refresh();
   }
 
@@ -673,11 +705,13 @@ export function createUI({ game, view, audio, storage, onQuality }) {
     forge: (id) => {
       const r = game.beginForge(id);
       if (!r.ok) return toast(r.reason, 'bad');
+      setCinematic(true);
       view.setFraming('forge');
       view.showForge(true);
       view.revealArtifact(r.artifact.rarity);
       audio.forge(D.rarityIndex(r.artifact.rarity));
-      setTimeout(() => forgeRevealModal(r.artifact), 900);
+      // Long enough for the piece to finish rising before the card slides up.
+      setTimeout(() => forgeRevealModal(r.artifact), 1250);
       refresh();
     },
     bind: () => finishForge(true),
@@ -726,17 +760,23 @@ export function createUI({ game, view, audio, storage, onQuality }) {
     },
     rebirthConfirm: () => {
       closeModal();
+      setCinematic(true);
       view.setFraming('rebirth');
       view.inkDissolve(1);
       audio.rebirth();
+      // Swap the world only once the ink has fully closed, then open again.
       setTimeout(() => {
         const r = game.reincarnate();
         if (r.ok) toast(`The wheel turns. ☸ +${fmt(r.gained)} Dao Insight.`, 'gold');
         refresh();
         view.sync(game.viewModel());
-        view.inkDissolve(-1);
-        setTimeout(() => view.setFraming(TAB_FRAMING[tab] || 'world'), 400);
-      }, 1400);
+        view.setFraming('world', true);
+        setTimeout(() => view.inkDissolve(-1), 260);
+        setTimeout(() => {
+          setCinematic(false);
+          view.setFraming(TAB_FRAMING[tab] || 'world');
+        }, 1500);
+      }, 1250);
     },
     records: recordsModal,
     chronicles: () => openModal(`<h2>Chronicles</h2>
@@ -800,6 +840,7 @@ export function createUI({ game, view, audio, storage, onQuality }) {
     closeModal();
     view.hideReveal();
     view.showForge(false);
+    setCinematic(false);
     view.setFraming(TAB_FRAMING[tab] || 'world');
     if (r.ok && r.bound) toast(`${r.artifact.name} bound.`, 'gold');
     else if (r.ok) toast('Salvaged for 💠 2.');
@@ -891,6 +932,7 @@ export function createUI({ game, view, audio, storage, onQuality }) {
         duelRun.waiting = false;
         duelRun.round += 1;
         view.endClash();
+        view.clashImpact(false);
         audio.clashMiss();
         setTimeout(nextClash, 420);
       }
