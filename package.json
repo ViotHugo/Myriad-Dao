@@ -1,0 +1,16 @@
+{
+  "name": "myriad-dao",
+  "version": "0.5.0",
+  "description": "Myriad Dao: Ascension — an idle cultivation game rendered as an ink-wash mountain in Three.js.",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "test": "node tests/run.js",
+    "sim": "node tools/balance-sim.js",
+    "sim:active": "node tools/balance-sim.js --active",
+    "balance": "node tools/balance-sim.js --check",
+    "serve": "node tools/serve.js",
+    "icons": "node tools/make-icons.js"
+  },
+  "license": "MIT"
+}
