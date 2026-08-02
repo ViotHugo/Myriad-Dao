@@ -50,10 +50,11 @@ export function createView({ canvas, onTap, onDoubleTap, settings }) {
   const camera = new THREE.PerspectiveCamera(42, 1, 0.5, 900);
 
   const env = createEnv();
-  const world = createWorld(env, tier);
-  const avatar = createAvatar(env, tier);
-  const sect = createSect(env, tier);
-  const effects = createEffects(env, tier);
+  // Rebuildable: a tier change swaps these out wholesale (see setQuality).
+  let world = createWorld(env, tier);
+  let avatar = createAvatar(env, tier);
+  let sect = createSect(env, tier);
+  let effects = createEffects(env, tier);
   scene.add(world.group, avatar.group, sect.group, effects.group);
 
   /* --------------------------------------------------------- post stack */
@@ -195,6 +196,7 @@ export function createView({ canvas, onTap, onDoubleTap, settings }) {
     const hit = pos >= 1 - minigame.window;
     minigame.kind = null;
     effects.setClash(pos, minigame.window, false);
+    effects.clashImpact(hit);
     postFlash(hit ? '#e8b34b' : '#26303c', 0.35);
     return { hit };
   }
@@ -225,18 +227,53 @@ export function createView({ canvas, onTap, onDoubleTap, settings }) {
   let vmCache = null;
   const watchdog = createWatchdog((next) => setQuality(next));
 
+  /** Free every geometry and material under a group before dropping it. */
+  function disposeGroup(root) {
+    root.traverse((o) => {
+      if (o.geometry) o.geometry.dispose();
+      const m = o.material;
+      if (Array.isArray(m)) m.forEach((x) => x.dispose());
+      else if (m) m.dispose();
+    });
+    scene.remove(root);
+  }
+
+  // Counts that are baked into geometry at construction time. Changing any of
+  // them means the scene has to be rebuilt, not just re-sized.
+  const GEOMETRY_KEYS = ['mistBands', 'ridgeLayers', 'qiMotes', 'sparks', 'disciples', 'floatSwords', 'water', 'stars'];
+
+  function rebuildScene() {
+    for (const g of [world.group, avatar.group, sect.group, effects.group]) disposeGroup(g);
+    world = createWorld(env, tier);
+    avatar = createAvatar(env, tier);
+    sect = createSect(env, tier);
+    effects = createEffects(env, tier);
+    scene.add(world.group, avatar.group, sect.group, effects.group);
+    // Repaint the new geometry with the realm we are actually in.
+    const p = PALETTES[Math.max(0, Math.min(PALETTES.length - 1, realmShown))];
+    if (realmShown >= 0) { world.applyPalette(p, true); pushLive(p, 1); }
+    if (vmCache) { avatar.sync(vmCache, RARITY_COLORS); sect.sync(vmCache); }
+  }
+
   function setQuality(setting) {
     // Accepts 'auto', a tier name, undefined or nonsense — resolveTier always
     // lands on a real tier. Indexing TIERS directly here meant that choosing
     // Auto in Settings threw and left the renderer half-configured.
     const name = resolveTier(setting);
     if (name === tierName) return;
+    const prev = tier;
     tierName = name;
     tier = TIERS[name];
-    // Geometry counts are baked at boot; what we can change live is resolution,
-    // the post pass, and how hard the swarms work. resize() applies both.
+
+    // Never rebuild out from under a set piece — it would drop the tribulation
+    // or the duel mid-animation. Resolution still applies immediately.
+    const geometryChanged = GEOMETRY_KEYS.some((k) => prev[k] !== tier[k]);
+    if (geometryChanged && minigame.kind === null) rebuildScene();
+    else if (geometryChanged) pendingRebuild = true;
     resize();
   }
+
+  let pendingRebuild = false;
 
   function setReducedMotion(v) { reduced = !!v; }
 
@@ -294,11 +331,16 @@ export function createView({ canvas, onTap, onDoubleTap, settings }) {
       effects.setClash(((minigame.marker % 1) + 1) % 1, minigame.window, true);
     }
 
+    if (pendingRebuild && minigame.kind === null) {
+      pendingRebuild = false;
+      rebuildScene();
+    }
+
     if (flash > 0) flash = Math.max(0, flash - dt * flashDecay);
     postMat.uniforms.uFlash.value = flash;
 
     if (dissolveDir !== 0) {
-      dissolve = THREE.MathUtils.clamp(dissolve + dt * dissolveDir * 0.8, 0, 1);
+      dissolve = THREE.MathUtils.clamp(dissolve + dt * dissolveDir * 1.15, 0, 1);
       if ((dissolveDir > 0 && dissolve >= 1) || (dissolveDir < 0 && dissolve <= 0)) dissolveDir = 0;
     }
     postMat.uniforms.uDissolve.value = dissolve;
@@ -340,7 +382,11 @@ export function createView({ canvas, onTap, onDoubleTap, settings }) {
   }
 
   return {
-    renderer, scene, camera, env, world, avatar, sect, effects, rig,
+    renderer, scene, camera, env, rig,
+    get world() { return world; },
+    get avatar() { return avatar; },
+    get sect() { return sect; },
+    get effects() { return effects; },
     render, sync, resize, dispose, project, tapAnchor,
     setFraming: (n, i) => rig.setFraming(n, i),
     get framing() { return rig.framing; },
@@ -349,12 +395,14 @@ export function createView({ canvas, onTap, onDoubleTap, settings }) {
     startTribulation, tribulationTap,
     startClash, clashTap, endClash,
     get minigame() { return minigame; },
+    get postDissolve() { return postMat.uniforms.uDissolve.value; },
     ripple: (color) => effects.ripple(new THREE.Vector3(0, 0.35, 0), color),
-    showForge: effects.showForge,
+    showForge: (on) => effects.showForge(on),
     revealArtifact: (rarity) => effects.revealArtifact(rarity, RARITY_COLORS[rarity] || '#8e9099'),
-    hideReveal: effects.hideReveal,
-    showDuel: effects.showDuel,
-    knockback: effects.knockback,
+    hideReveal: () => effects.hideReveal(),
+    showDuel: (on) => effects.showDuel(on),
+    knockback: (won) => effects.knockback(won),
+    clashImpact: (hit) => effects.clashImpact(hit),
     liftSoul: () => effects.liftSoul(),
     inkDissolve,
     postFlash,

@@ -16,7 +16,7 @@ import {
   offlineRate, offlineCap, insightGain, lifespan, atCap, isMajor, artifactPct,
   lootMult, isFinalStage, SAVE_VERSION, data as D,
 } from '../js/engine.js';
-import { resolveTier } from '../js/view3d/quality.js';
+import { resolveTier, createWatchdog } from '../js/view3d/quality.js';
 import { mulberry32, seededRandom } from '../js/rng.js';
 import { fmt, fmtTime } from '../js/format.js';
 
@@ -891,6 +891,21 @@ section('A11 — the rivers and lakes');
     return renown(h.state) === 99;
   })());
   check('an unranked cultivator has no renown', renown(game().state) === 0);
+  check('resolving a duel that is not running is refused, not thrown', (() => {
+    // The UI used to read out.rival.name unconditionally. A forced death
+    // mid-duel wipes state.duel, so this path is reachable in play.
+    const h = game();
+    grant(h, { realm: 2 });
+    const r = h.resolveDuel(2);
+    return r.ok === false && typeof r.reason === 'string';
+  })());
+  check('a forced rebirth mid-duel clears the in-flight duel', (() => {
+    const h = game();
+    grant(h, { realm: 4, age: 1599 });
+    h.beginDuel();
+    h.tick(1800 * 3);           // cross the lifespan; the shell fails
+    return h.state.duel === null && h.state.stats.rebirths === 1;
+  })());
   check('rank 1 has no one left to challenge', (() => {
     const h = game(); grant(h, { realm: 2 });
     h.state.jianghu.rank = 1;
@@ -1160,6 +1175,33 @@ function importSaveSafe(store) {
 section('Architecture — purity and determinism');
 {
   check('the engine runs with no DOM present', typeof globalThis.document === 'undefined');
+  check('the watchdog drops a tier when frames are slow', (() => {
+    let tier = 'high';
+    const w = createWatchdog((t) => { tier = t; });
+    for (let i = 0; i < 180 + 120 * 6; i++) w(1 / 15, tier);
+    return tier === 'low';
+  })());
+  check('the watchdog climbs back when there is headroom', (() => {
+    let tier = 'low';
+    const w = createWatchdog((t) => { tier = t; });
+    for (let i = 0; i < 180 + 120 * 12; i++) w(1 / 120, tier);
+    return tier === 'high';
+  })());
+  check('the watchdog leaves a comfortable high tier alone', (() => {
+    let changes = 0;
+    const w = createWatchdog(() => { changes++; });
+    for (let i = 0; i < 180 + 120 * 8; i++) w(1 / 120, 'high');
+    return changes === 0;
+  })());
+  check('the watchdog does not flap once it has dropped', (() => {
+    // Slow, then fast: having stepped down it must not climb straight back.
+    let tier = 'high';
+    let changes = 0;
+    const w = createWatchdog((t) => { tier = t; changes++; });
+    for (let i = 0; i < 180 + 120 * 3; i++) w(1 / 15, tier);
+    for (let i = 0; i < 120 * 12; i++) w(1 / 120, tier);
+    return tier !== 'high' && changes <= 2;
+  })());
   check('every quality setting resolves to a real tier', (() => {
     // Regression: choosing Auto in Settings passed undefined through to the
     // renderer, which indexed TIERS[undefined] and threw mid-reconfigure.

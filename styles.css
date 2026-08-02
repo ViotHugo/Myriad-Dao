@@ -366,6 +366,22 @@ button.act.danger { background: rgba(120,45,42,.22); border-color: #6b3230; colo
   display: grid; place-items: center; padding: var(--pad);
   overflow-y: auto;
 }
+/* A reveal must not scrim the thing it is revealing: no backdrop, card at the
+   foot of the screen, artifact rising in the clear space above it. */
+.modal.reveal {
+  background: linear-gradient(180deg, rgba(6,8,11,0) 45%, rgba(6,8,11,.55) 72%, rgba(6,8,11,.86) 100%);
+  backdrop-filter: none;
+  align-items: end;
+  padding-bottom: calc(var(--safe-b) + 22px);
+}
+.modal.reveal .modal-box {
+  animation: sheetUp .3s cubic-bezier(.2,.8,.3,1);
+  background: rgba(15,19,25,.9);
+}
+
+/* While a set piece plays, the tabs stay put but stop inviting a tap. */
+.tabs.is-dimmed { opacity: .35; pointer-events: none; }
+
 .modal-box {
   width: min(440px, 100%); max-height: 86vh; overflow-y: auto;
   background: rgba(15,19,25,.97); border: 1px solid var(--line);

@@ -152,23 +152,59 @@ export function createWorld(env, tier) {
   }
   group.add(rocks);
 
-  // A wind-bent pine, the one vertical the eye can rest on.
-  const pine = new THREE.Group();
-  const trunkMat = makeInkMaterial(env, { color: '#1e2229', rim: 0.5, bands: 3 });
-  const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.22, 4.6, 5), trunkMat);
-  trunk.position.y = 2.3;
-  trunk.rotation.z = 0.16;
-  pine.add(trunk);
-  const needleMat = makeInkMaterial(env, { color: '#22322c', rim: 0.6, bands: 3, flat: true });
-  for (let i = 0; i < 4; i++) {
-    const tier2 = new THREE.Mesh(new THREE.ConeGeometry(1.5 - i * 0.28, 0.5, 6, 1), needleMat);
-    tier2.position.set(-0.45 - i * 0.12, 3.0 + i * 0.62, 0);
-    tier2.rotation.z = -0.1;
-    tier2.scale.z = 0.55;
-    pine.add(tier2);
+  // The midground reads as ink laid over the haze, so it takes a near-flat dark
+  // material with almost no rim. Lit, mid-grey geometry out there looked like
+  // paper cut-outs pasted on the sky.
+  const trunkMat = makeInkMaterial(env, { color: '#141922', rim: 0.16, bands: 2 });
+  const needleMat = makeInkMaterial(env, { color: '#18232a', rim: 0.20, bands: 2, flat: true });
+  const spurMat = makeInkMaterial(env, { color: '#151b24', rim: 0.14, bands: 2, flat: true });
+
+  /** A wind-bent pine: a leaning trunk and four flattened tiers of needles. */
+  function makePine(scale = 1) {
+    const g = new THREE.Group();
+    const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.22, 4.6, 5), trunkMat);
+    trunk.position.y = 2.3;
+    trunk.rotation.z = 0.16;
+    g.add(trunk);
+    for (let i = 0; i < 5; i++) {
+      const tierMesh = new THREE.Mesh(new THREE.ConeGeometry(1.35 - i * 0.24, 0.85, 6, 1), needleMat);
+      // Follows the trunk's lean, so the canopy sits on the tree rather than
+      // hovering next to it.
+      tierMesh.position.set(-0.10 - i * 0.09, 1.9 + i * 0.62, 0);
+      tierMesh.rotation.z = -0.06;
+      tierMesh.scale.z = 0.6;
+      g.add(tierMesh);
+    }
+    g.scale.setScalar(scale);
+    return g;
   }
-  pine.position.set(-7.4, 0, 1.6);
-  group.add(pine);
+
+  // The midground. The authored camera is yawed, so the band of the frame
+  // between the shelf and the first range looks out at roughly world x -26,
+  // z -40 — which was empty sky in every realm. A stand of pines and a rock
+  // spur out there gives the eye something to cross on the way up, and gives
+  // the mist something to wrap around.
+  const midground = new THREE.Group();
+  const mrand = mulberry32(6421);
+  // Far enough back to stay small, and set low so the canopies only just break
+  // the mist line — a few strokes, not a forest.
+  for (const [x, y, z, s] of [
+    [-30, -4.0, -58, 1.25], [-40, -5.0, -72, 1.05], [-22, -3.4, -52, 0.85],
+  ]) {
+    const p = makePine(s);
+    p.position.set(x, y, z);
+    p.rotation.y = mrand() * Math.PI * 2;
+    midground.add(p);
+  }
+  const pine = midground.children[0];
+  // A shoulder of rock for them to stand on, mostly drowned in the haze.
+  for (const [x, y, z, r, h] of [[-31, -12, -60, 11, 11], [-44, -15, -76, 13, 12]]) {
+    const spur = new THREE.Mesh(new THREE.ConeGeometry(r, h, 6, 1), spurMat);
+    spur.position.set(x, y, z);
+    spur.rotation.y = mrand() * Math.PI;
+    midground.add(spur);
+  }
+  group.add(midground);
 
   /* water ------------------------------------------------------------- */
   let water = null;
@@ -187,13 +223,17 @@ export function createWorld(env, tier) {
   const mistMats = [];
   for (let i = 0; i < tier.mistBands; i++) {
     const t = i / Math.max(1, tier.mistBands - 1);
+    // The mist belongs in the gap between the shelf and the first range — the
+    // band the eye crosses on the way up. It was sitting below the shelf,
+    // where the authored camera never looks.
     const mat = makeMistMaterial(env, {
-      opacity: 0.34 - t * 0.13,
+      opacity: 0.62 - t * 0.22,
       speed: 0.02 + t * 0.03,
     });
     mistMats.push(mat);
-    const band = new THREE.Mesh(new THREE.PlaneGeometry(340 + t * 380, 26 + t * 20, 24, 2), mat);
-    band.position.set((i % 2 ? -1 : 1) * (8 + t * 30), -8 - t * 5 + i * 1.4, -40 - t * 220);
+    const band = new THREE.Mesh(new THREE.PlaneGeometry(320 + t * 420, 16 + t * 24, 28, 2), mat);
+    // Centred on the midground the camera actually looks at, not on world zero.
+    band.position.set(-26 + (i % 2 ? -1 : 1) * (5 + t * 22), -1.0 - t * 5 - i * 0.6, -50 - t * 230);
     band.renderOrder = -8 + i;
     mist.add(band);
   }

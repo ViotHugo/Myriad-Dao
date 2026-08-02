@@ -87,7 +87,7 @@ export function createSect(env, tier) {
   t1.visible = false;
   group.add(t1);
 
-  const lanternMat = makeGlowMaterial(env, { color: '#e8b34b', power: 1.2, strength: 1.6 });
+  const lanternMat = makeGlowMaterial(env, { color: '#e8b34b', power: 1.2, strength: 1.5, core: 1 });
   const lanterns = new THREE.InstancedMesh(new THREE.SphereGeometry(0.14, 8, 6), lanternMat, 10);
   lanterns.count = 0;
   group.add(lanterns);
@@ -158,7 +158,7 @@ export function createSect(env, tier) {
   t4.add(skirt);
   const halo = new THREE.Mesh(
     new THREE.RingGeometry(6.2, 8.4, 40, 1),
-    makeGlowMaterial(env, { color: '#ffd76a', power: 1.0, strength: 0.55 }),
+    makeGlowMaterial(env, { color: '#ffd76a', power: 1.0, strength: 0.55, core: 0.85 }),
   );
   halo.rotation.x = -Math.PI / 2;
   halo.position.y = 12.4;
