@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1, user-scalable=no">
+<meta name="theme-color" content="#0b0e12">
+<meta name="description" content="An idle cultivation game: a Song-dynasty ink-wash mountain where centuries pass in the sky and your sect grows in the valley below.">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="mobile-web-app-capable" content="yes">
+<title>Myriad Dao: Ascension</title>
+<link rel="manifest" href="./manifest.webmanifest">
+<link rel="icon" href="./icons/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="./icons/icon-192.png">
+<link rel="stylesheet" href="./styles.css">
+<script type="importmap">
+{ "imports": { "three": "./vendor/three.module.min.js" } }
+</script>
+</head>
+<body>
+
+<div id="app">
+  <!-- The world. This canvas is also the cultivate button. -->
+  <canvas id="scene" aria-label="The mountain. Tap to cultivate."></canvas>
+
+  <div id="boot" class="boot">
+    <div class="boot-mark">道</div>
+    <div class="boot-text">gathering the mountain…</div>
+  </div>
+
+  <header id="hud" hidden>
+    <div class="hud-row">
+      <button id="who" class="who" type="button">
+        <span id="playerName" class="name">Nameless Wanderer</span>
+        <span id="realmLine" class="realm">Early Body Tempering</span>
+      </button>
+      <div class="hud-right">
+        <span id="qiRate" class="rate">1 Qi/s</span>
+        <button id="openSettings" class="icon-btn" type="button" aria-label="Settings">☰</button>
+      </div>
+    </div>
+    <div class="qibar" id="qibar">
+      <div class="qibar-fill" id="qiFill"></div>
+      <div class="qibar-text"><span id="qiText">0 / 50</span></div>
+    </div>
+    <div class="purse" id="purse"></div>
+  </header>
+
+  <div id="floaters" aria-hidden="true"></div>
+  <div id="statusStrip" class="status-strip"></div>
+
+  <main id="sheet" class="sheet" hidden>
+    <div class="sheet-grip"></div>
+    <div id="sheetBody" class="sheet-body"></div>
+  </main>
+
+  <section id="cultivatePad" class="cultivate-pad" hidden>
+    <div id="padLinks" class="pad-links"></div>
+    <div id="buffStrip" class="buff-strip"></div>
+    <button id="breakBtn" class="break-btn" type="button" hidden></button>
+    <p id="hint" class="hint">Tap the mountain to gather Qi.</p>
+  </section>
+
+  <nav id="tabs" class="tabs" hidden>
+    <button class="tab is-active" data-tab="cultivate" type="button"><span>坐</span>Cultivate</button>
+    <button class="tab" data-tab="arts" type="button"><span>術</span>Arts</button>
+    <button class="tab" data-tab="alchemy" type="button"><span>丹</span>Alchemy</button>
+    <button class="tab" data-tab="journey" type="button"><span>行</span>Journey</button>
+    <button class="tab" data-tab="sect" type="button"><span>宗</span>Sect</button>
+  </nav>
+
+  <!-- Full-screen moments: tribulation, duel, forge reveal, seclusion, rebirth. -->
+  <div id="overlay" class="overlay" hidden></div>
+  <div id="modal" class="modal" hidden></div>
+  <div id="toasts" class="toasts" aria-live="polite"></div>
+</div>
+
+<script type="module" src="./js/main.js"></script>
+</body>
+</html>

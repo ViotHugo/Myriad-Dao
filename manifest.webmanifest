@@ -1,0 +1,21 @@
+{
+  "name": "Myriad Dao: Ascension",
+  "short_name": "Myriad Dao",
+  "description": "An idle cultivation game that looks like a Song-dynasty ink-wash landscape you can breathe inside.",
+  "id": "/myriad-dao/",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "display_override": ["standalone", "fullscreen"],
+  "orientation": "portrait",
+  "background_color": "#0b0e12",
+  "theme_color": "#0b0e12",
+  "categories": ["games"],
+  "lang": "en",
+  "icons": [
+    { "src": "./icons/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "./icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "./icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "./icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
