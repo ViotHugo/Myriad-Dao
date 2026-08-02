@@ -5,6 +5,7 @@
 
 import * as THREE from 'three';
 import { mulberry32 } from '../rng.js';
+import { placeAtDepth } from './framing.js';
 import {
   makeSkyMaterial, makeRidgeMaterial, makeInkMaterial, makeWaterMaterial,
   makeMistMaterial,
@@ -77,22 +78,54 @@ export function createWorld(env, tier) {
 
   /* sky ------------------------------------------------------------- */
   const skyMat = makeSkyMaterial(env);
-  const sky = new THREE.Mesh(new THREE.SphereGeometry(480, 32, 20), skyMat);
+  const sky = new THREE.Mesh(new THREE.SphereGeometry(760, 32, 20), skyMat);
   sky.frustumCulled = false;
   group.add(sky);
 
   /* ridges ----------------------------------------------------------- */
-  // Five layers marching away from the shelf, each flatter, paler and slower
-  // than the last. This is the entire sense of depth in the composition.
-  // Heights are tuned against the authored camera: the near crest must sit
-  // inside a portrait frame, not above it.
+  // Five layers marching away from the shelf. Each is specified by where its
+  // skyline should land in the frame, not by a height in world units: the
+  // camera is authored and fixed, so the frame is the thing being composed and
+  // the world coordinate is an implementation detail. placeAtDepth turns one
+  // into the other.
+  //
+  // These crests all sit *below* the horizon (v = 0.198) on purpose. The
+  // cultivator is on a high shelf looking out and down; the ranges below are
+  // valley walls, and the skyline above them belongs to the karst spires in
+  // scenery.js. Raising these back over the horizon buries the whole range —
+  // the ridge strips are opaque, so anything behind them is simply gone.
   const LAYERS = [
-    { z: -58,  width: 260, height: 10, depth: 20, segments: 128, roughness: 1.5 },
-    { z: -96,  width: 340, height: 14, depth: 26, segments: 112, roughness: 1.2 },
-    { z: -152, width: 460, height: 19, depth: 34, segments: 96,  roughness: 1.0 },
-    { z: -232, width: 640, height: 25, depth: 44, segments: 80,  roughness: 0.8 },
-    { z: -336, width: 860, height: 33, depth: 58, segments: 64,  roughness: 0.6 },
+    { z: -58,  crestV: 0.440, segments: 128, roughness: 1.5 },
+    { z: -96,  crestV: 0.404, segments: 112, roughness: 1.2 },
+    { z: -152, crestV: 0.374, segments: 96,  roughness: 1.0 },
+    { z: -232, crestV: 0.350, segments: 80,  roughness: 0.8 },
+    { z: -336, crestV: 0.330, segments: 64,  roughness: 0.6 },
   ];
+  // Turn a crest target into the height/base/width the strip builder wants.
+  // `height` is scaled by 0.35..1.5 along the strip, so the band between the
+  // highest and lowest crest is what `spread` controls.
+  const solveLayer = (L, spread = 0.075) => {
+    const top = placeAtDepth(0.5, L.crestV, L.z)[1];
+    const bot = placeAtDepth(0.5, L.crestV + spread, L.z)[1];
+    const height = (top - bot) / 1.15;
+    const baseY = bot - 0.35 * height;
+    const left = placeAtDepth(0, L.crestV, L.z)[0];
+    const right = placeAtDepth(1, L.crestV, L.z)[0];
+    return {
+      ...L,
+      height,
+      baseY,
+      // Down to well past the bottom of the frame, so the strip never ends
+      // mid-air over the valley.
+      depth: baseY - placeAtDepth(0.5, 1.35, L.z)[1],
+      // Wide enough to survive the player swinging the camera through its arc.
+      width: Math.abs(right - left) * 2.4,
+    };
+  };
+  // Gapped on purpose: scenery.js slots its spire bands and cloud decks between
+  // these numbers so a karst range can stand behind one ridge and in front of
+  // the next. See SCENERY_ORDER there.
+  const RIDGE_ORDER = [-6, -9, -12, -15, -18];
   const ridgeMats = [];
   const ridges = new THREE.Group();
   const layerCount = Math.min(tier.ridgeLayers, LAYERS.length);
@@ -108,11 +141,14 @@ export function createWorld(env, tier) {
     // values keep the ink at the crest only and let the rest drown in mist —
     // which is what stops the nearest range reading as a black slab.
     const mat = makeRidgeMaterial(env, { fade: 0.88 - slot * 0.10, grain: 0.4 - slot * 0.05 });
-    const mesh = new THREE.Mesh(ridgeGeometry({ ...L, seed: 1000 + idx * 37 }), mat);
-    mesh.position.set(0, -2, L.z);
+    const S = solveLayer(L);
+    const mesh = new THREE.Mesh(ridgeGeometry({ ...S, seed: 1000 + idx * 37 }), mat);
+    mesh.position.set(placeAtDepth(0.5, S.crestV, S.z)[0], S.baseY, S.z);
     // These write no depth, so they are a painter's stack: the furthest layer
     // must go down first or a distant range paints over the ridge in front.
-    mesh.renderOrder = -10 + (chosen.length - 1 - slot);
+    // Keyed to the layer, not the slot, so dropping a middle layer at low
+    // quality cannot renumber the stack the scenery interleaves itself into.
+    mesh.renderOrder = RIDGE_ORDER[idx];
     mesh.userData.layer = idx;
     ridgeMats.push({ mat, layer: idx });
     ridges.add(mesh);
@@ -135,20 +171,27 @@ export function createWorld(env, tier) {
   stone.position.y = 0.15;
   group.add(stone);
 
-  // A few standing rocks, for the negative space to push against.
-  const rocks = new THREE.Group();
-  const rrand = mulberry32(97);
-  for (let i = 0; i < 5; i++) {
-    const a = rrand() * Math.PI * 2;
-    const r = 5.2 + rrand() * 3.4;
-    const h = 0.7 + rrand() * 2.1;
-    const rock = new THREE.Mesh(
-      new THREE.ConeGeometry(0.35 + rrand() * 0.6, h, 5, 1),
-      stoneMat,
-    );
-    rock.position.set(Math.cos(a) * r, h / 2 - 0.1, Math.sin(a) * r);
-    rock.rotation.set((rrand() - 0.5) * 0.25, rrand() * 3, (rrand() - 0.5) * 0.25);
-    rocks.add(rock);
+  // A few standing rocks, for the negative space to push against. One draw
+  // call: five separate meshes here cost as much as the whole karst range.
+  const ROCKS = 5;
+  const rocks = new THREE.InstancedMesh(new THREE.ConeGeometry(1, 1, 5, 1), stoneMat, ROCKS);
+  {
+    const rrand = mulberry32(97);
+    const m = new THREE.Matrix4();
+    const q = new THREE.Quaternion();
+    const v = new THREE.Vector3();
+    const sc = new THREE.Vector3();
+    for (let i = 0; i < ROCKS; i++) {
+      const a = rrand() * Math.PI * 2;
+      const r = 5.2 + rrand() * 3.4;
+      const h = 0.7 + rrand() * 2.1;
+      const rad = 0.35 + rrand() * 0.6;
+      v.set(Math.cos(a) * r, h / 2 - 0.1, Math.sin(a) * r);
+      q.setFromEuler(new THREE.Euler((rrand() - 0.5) * 0.25, rrand() * 3, (rrand() - 0.5) * 0.25));
+      sc.set(rad, h, rad);
+      rocks.setMatrixAt(i, m.compose(v, q, sc));
+    }
+    rocks.instanceMatrix.needsUpdate = true;
   }
   group.add(rocks);
 
@@ -159,24 +202,41 @@ export function createWorld(env, tier) {
   const needleMat = makeInkMaterial(env, { color: '#18232a', rim: 0.20, bands: 2, flat: true });
   const spurMat = makeInkMaterial(env, { color: '#151b24', rim: 0.14, bands: 2, flat: true });
 
-  /** A wind-bent pine: a leaning trunk and four flattened tiers of needles. */
-  function makePine(scale = 1) {
-    const g = new THREE.Group();
-    const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.22, 4.6, 5), trunkMat);
-    trunk.position.y = 2.3;
-    trunk.rotation.z = 0.16;
-    g.add(trunk);
-    for (let i = 0; i < 5; i++) {
-      const tierMesh = new THREE.Mesh(new THREE.ConeGeometry(1.35 - i * 0.24, 0.85, 6, 1), needleMat);
-      // Follows the trunk's lean, so the canopy sits on the tree rather than
-      // hovering next to it.
-      tierMesh.position.set(-0.10 - i * 0.09, 1.9 + i * 0.62, 0);
-      tierMesh.rotation.z = -0.06;
-      tierMesh.scale.z = 0.6;
-      g.add(tierMesh);
-    }
-    g.scale.setScalar(scale);
-    return g;
+  // Pines as two instanced draws rather than six meshes per tree: at two trees
+  // that was twelve draw calls for scenery the player barely registers.
+  const PINES = [
+    [-38, -4.6, -64, 1.2],
+    [-49, -5.6, -78, 1.0],
+  ];
+  const TIERS_PER_PINE = 5;
+  const pineTrunks = new THREE.InstancedMesh(
+    new THREE.CylinderGeometry(0.08, 0.22, 4.6, 5), trunkMat, PINES.length,
+  );
+  const pineNeedles = new THREE.InstancedMesh(
+    new THREE.ConeGeometry(1, 0.85, 6, 1), needleMat, PINES.length * TIERS_PER_PINE,
+  );
+  {
+    const m = new THREE.Matrix4();
+    const q = new THREE.Quaternion();
+    const v = new THREE.Vector3();
+    const sc = new THREE.Vector3();
+    const prand = mulberry32(6421);
+    PINES.forEach(([px, py, pz, ps], p) => {
+      const yaw = prand() * Math.PI * 2;
+      v.set(px, py + 2.3 * ps, pz);
+      q.setFromEuler(new THREE.Euler(0, yaw, 0.16, 'YXZ'));
+      sc.set(ps, ps, ps);
+      pineTrunks.setMatrixAt(p, m.compose(v, q, sc));
+      for (let i = 0; i < TIERS_PER_PINE; i++) {
+        const rad = (1.35 - i * 0.24) * ps;
+        v.set(px + (-0.10 - i * 0.09) * ps, py + (1.9 + i * 0.62) * ps, pz);
+        q.setFromEuler(new THREE.Euler(0, yaw, -0.06, 'YXZ'));
+        sc.set(rad, ps, rad * 0.6);
+        pineNeedles.setMatrixAt(p * TIERS_PER_PINE + i, m.compose(v, q, sc));
+      }
+    });
+    pineTrunks.instanceMatrix.needsUpdate = true;
+    pineNeedles.instanceMatrix.needsUpdate = true;
   }
 
   // The midground. The authored camera is yawed, so the band of the frame
@@ -184,21 +244,15 @@ export function createWorld(env, tier) {
   // z -40 — which was empty sky in every realm. A stand of pines and a rock
   // spur out there gives the eye something to cross on the way up, and gives
   // the mist something to wrap around.
+  // Far enough back to stay small, and set low so the canopies only just break
+  // the mist line — a few strokes, not a forest. The plum and the karst range
+  // carry the middle distance now; a third pine only crowded them.
   const midground = new THREE.Group();
   const mrand = mulberry32(6421);
-  // Far enough back to stay small, and set low so the canopies only just break
-  // the mist line — a few strokes, not a forest.
-  for (const [x, y, z, s] of [
-    [-30, -4.0, -58, 1.25], [-40, -5.0, -72, 1.05], [-22, -3.4, -52, 0.85],
-  ]) {
-    const p = makePine(s);
-    p.position.set(x, y, z);
-    p.rotation.y = mrand() * Math.PI * 2;
-    midground.add(p);
-  }
-  const pine = midground.children[0];
+  midground.add(pineTrunks, pineNeedles);
+  const pine = pineTrunks;
   // A shoulder of rock for them to stand on, mostly drowned in the haze.
-  for (const [x, y, z, r, h] of [[-31, -12, -60, 11, 11], [-44, -15, -76, 13, 12]]) {
+  for (const [x, y, z, r, h] of [[-39, -13, -66, 11, 11], [-52, -16, -80, 13, 12]]) {
     const spur = new THREE.Mesh(new THREE.ConeGeometry(r, h, 6, 1), spurMat);
     spur.position.set(x, y, z);
     spur.rotation.y = mrand() * Math.PI;
@@ -221,20 +275,32 @@ export function createWorld(env, tier) {
   /* mist -------------------------------------------------------------- */
   const mist = new THREE.Group();
   const mistMats = [];
-  for (let i = 0; i < tier.mistBands; i++) {
-    const t = i / Math.max(1, tier.mistBands - 1);
-    // The mist belongs in the gap between the shelf and the first range — the
-    // band the eye crosses on the way up. It was sitting below the shelf,
-    // where the authored camera never looks.
-    const mat = makeMistMaterial(env, {
-      opacity: 0.62 - t * 0.22,
-      speed: 0.02 + t * 0.03,
-    });
+  // The mist lies in the valley: below the ridge crests, above the shelf. Placed
+  // by frame position for the same reason the ridges are — parked at a fixed
+  // world height it drifted up over the skyline, and three translucent bands
+  // across the range washed the peaks out to nothing.
+  const MIST = [
+    { z: -50,  top: 0.470, bottom: 0.760, opacity: 0.62 },
+    { z: -165, top: 0.418, bottom: 0.618, opacity: 0.51 },
+    { z: -280, top: 0.384, bottom: 0.552, opacity: 0.40 },
+  ];
+  for (let i = 0; i < Math.min(tier.mistBands, MIST.length); i++) {
+    const M = MIST[i];
+    const t = i / Math.max(1, MIST.length - 1);
+    const mat = makeMistMaterial(env, { opacity: M.opacity, speed: 0.02 + t * 0.03 });
     mistMats.push(mat);
-    const band = new THREE.Mesh(new THREE.PlaneGeometry(320 + t * 420, 16 + t * 24, 28, 2), mat);
-    // Centred on the midground the camera actually looks at, not on world zero.
-    band.position.set(-26 + (i % 2 ? -1 : 1) * (5 + t * 22), -1.0 - t * 5 - i * 0.6, -50 - t * 230);
-    band.renderOrder = -8 + i;
+    const top = placeAtDepth(0.5, M.top, M.z);
+    const bottom = placeAtDepth(0.5, M.bottom, M.z);
+    const left = placeAtDepth(0, M.top, M.z);
+    const right = placeAtDepth(1, M.top, M.z);
+    const band = new THREE.Mesh(
+      new THREE.PlaneGeometry(Math.abs(right[0] - left[0]) * 2.2, top[1] - bottom[1], 28, 2), mat,
+    );
+    // Offset alternately so three bands never line up into one slab.
+    band.position.set(top[0] + (i % 2 ? -1 : 1) * (5 + t * 22), (top[1] + bottom[1]) / 2, M.z);
+    // The nearest ridge is at z = -58, so every mist band but the first hangs
+    // behind it: interleave rather than veiling the whole stack.
+    band.renderOrder = i === 0 ? -4 : RIDGE_ORDER[Math.min(4, i * 2)] + 1;
     mist.add(band);
   }
   group.add(mist);

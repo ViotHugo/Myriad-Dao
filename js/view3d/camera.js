@@ -6,19 +6,11 @@
 
 import * as THREE from 'three';
 
-/** Named framings. Opening the Sect tab moves the camera; it does not hide the world. */
-export const FRAMINGS = {
-  world:  { target: [0.8, 2.6, -1.0], dist: 12.5, yaw: 0.62, pitch: 0.17, fov: 42, drift: 1 },
-  close:  { target: [0.0, 1.3, 0.0],  dist: 5.6,  yaw: 0.45, pitch: 0.10, fov: 40, drift: 0.6 },
-  // The sheet covers the lower ~68% of a phone screen, so the sect framing aims
-  // well below the valley: that lifts the sect into the strip the player can
-  // actually still see. Otherwise "the camera moves to the sect" is a lie.
-  sect:   { target: [2.0, -26.0, -52.0], dist: 46, yaw: 0.95, pitch: 0.30, fov: 44, drift: 0.7 },
-  trib:   { target: [0.0, 2.2, 0.0],  dist: 14.0, yaw: 0.30, pitch: 0.02, fov: 50, drift: 0.3 },
-  forge:  { target: [5.2, 1.1, 3.4],  dist: 4.6,  yaw: 0.90, pitch: 0.14, fov: 40, drift: 0.4 },
-  duel:   { target: [26, -2.9, -14],  dist: 14.5, yaw: 0.16, pitch: 0.05, fov: 44, drift: 0.3 },
-  rebirth: { target: [0.0, 3.0, 0.0], dist: 20.0, yaw: 0.62, pitch: -0.02, fov: 55, drift: 0.2 },
-};
+// The framings live in framing.js so the scenery can compose against them
+// without pulling in Three.js — and so the rig and the composition can never
+// drift apart. The position formula below is mirrored there; change both.
+export { FRAMINGS } from './framing.js';
+import { FRAMINGS } from './framing.js';
 
 export function createCameraRig(camera, canvas, { onTap, onDoubleTap, reducedMotion = () => false }) {
   const cur = {

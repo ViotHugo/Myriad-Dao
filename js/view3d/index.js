@@ -11,6 +11,7 @@ import { TIERS, resolveTier, createWatchdog } from './quality.js';
 import { createWorld } from './world.js';
 import { createAvatar } from './avatar.js';
 import { createSect } from './sect.js';
+import { createScenery } from './scenery.js';
 import { createEffects, DUEL_ANCHOR, FORGE_ANCHOR } from './effects.js';
 import { createCameraRig, FRAMINGS } from './camera.js';
 
@@ -54,8 +55,9 @@ export function createView({ canvas, onTap, onDoubleTap, settings }) {
   let world = createWorld(env, tier);
   let avatar = createAvatar(env, tier);
   let sect = createSect(env, tier);
+  let scenery = createScenery(env, tier);
   let effects = createEffects(env, tier);
-  scene.add(world.group, avatar.group, sect.group, effects.group);
+  scene.add(world.group, avatar.group, sect.group, scenery.group, effects.group);
 
   /* --------------------------------------------------------- post stack */
 
@@ -133,6 +135,7 @@ export function createView({ canvas, onTap, onDoubleTap, settings }) {
     p.ridges.forEach((c, i) => live.ridges[i].lerp(new THREE.Color(c), k));
     avatar.setPalette(live);
     sect.setPalette(live);
+    scenery.setPalette(live);
     effects.setPalette(live);
   }
 
@@ -240,19 +243,22 @@ export function createView({ canvas, onTap, onDoubleTap, settings }) {
 
   // Counts that are baked into geometry at construction time. Changing any of
   // them means the scene has to be rebuilt, not just re-sized.
-  const GEOMETRY_KEYS = ['mistBands', 'ridgeLayers', 'qiMotes', 'sparks', 'disciples', 'floatSwords', 'water', 'stars'];
+  const GEOMETRY_KEYS = ['mistBands', 'ridgeLayers', 'qiMotes', 'sparks', 'disciples', 'floatSwords',
+    'water', 'stars', 'spires', 'cloudDecks', 'plumDepth', 'blossoms', 'petals', 'cranes',
+    'waterfall', 'bamboo', 'fireflies'];
 
   function rebuildScene() {
-    for (const g of [world.group, avatar.group, sect.group, effects.group]) disposeGroup(g);
+    for (const g of [world.group, avatar.group, sect.group, scenery.group, effects.group]) disposeGroup(g);
     world = createWorld(env, tier);
     avatar = createAvatar(env, tier);
     sect = createSect(env, tier);
+    scenery = createScenery(env, tier);
     effects = createEffects(env, tier);
-    scene.add(world.group, avatar.group, sect.group, effects.group);
+    scene.add(world.group, avatar.group, sect.group, scenery.group, effects.group);
     // Repaint the new geometry with the realm we are actually in.
     const p = PALETTES[Math.max(0, Math.min(PALETTES.length - 1, realmShown))];
     if (realmShown >= 0) { world.applyPalette(p, true); pushLive(p, 1); }
-    if (vmCache) { avatar.sync(vmCache, RARITY_COLORS); sect.sync(vmCache); }
+    if (vmCache) { avatar.sync(vmCache, RARITY_COLORS); sect.sync(vmCache); scenery.sync(vmCache); }
   }
 
   function setQuality(setting) {
@@ -282,6 +288,7 @@ export function createView({ canvas, onTap, onDoubleTap, settings }) {
     setRealm(vm.realm, realmShown === -1);
     avatar.sync(vm, RARITY_COLORS);
     sect.sync(vm);
+    scenery.sync(vm);
     env.uDesat.value += ((vm.withered ? 0.75 : 0) - env.uDesat.value) * 0.12;
   }
 
@@ -305,6 +312,7 @@ export function createView({ canvas, onTap, onDoubleTap, settings }) {
     world.update(dt, clock);
     avatar.update(dt, clock, reduced);
     sect.update(dt, clock);
+    scenery.update(dt, clock, reduced);
     effects.update(dt, clock, camera);
 
     if (minigame.kind === 'trib') {
@@ -386,6 +394,7 @@ export function createView({ canvas, onTap, onDoubleTap, settings }) {
     get world() { return world; },
     get avatar() { return avatar; },
     get sect() { return sect; },
+    get scenery() { return scenery; },
     get effects() { return effects; },
     render, sync, resize, dispose, project, tapAnchor,
     setFraming: (n, i) => rig.setFraming(n, i),
