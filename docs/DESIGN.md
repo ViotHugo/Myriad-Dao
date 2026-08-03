@@ -76,11 +76,23 @@ heightmaps, no models.
 
 Four things make it read as ink rather than as low-poly terrain:
 
-1. **A ridge dissolves upward into its own colour and downward into fog.** In
-   ink-wash, the foot of a mountain drowns in *opaque* mist, it is not a hole.
-   An earlier build faded the base to transparent and the midground became a
-   black void; the `fade` uniform now controls how far up the strip the ridge's
-   own ink takes over, and everything below it is solid fog colour.
+1. **A ridge is a dark crest that dissolves into whatever weather is behind
+   it.** This one took two attempts to get right, and the first attempt is
+   instructive. Fading the foot of a strip to *transparent* left a black void
+   where the valley should be, because at the time there was nothing behind it —
+   so the fix was to fade the colour to fog while keeping the strip opaque. That
+   worked, and then the cloud sea was built behind it, and the same opaque foot
+   became the single worst thing in the picture: five strips whose feet cover
+   the whole lower middle of the frame, painting flat untextured grey over the
+   sea of cloud. It is what made the landscape read as *dry*.
+
+   The foot dissolves for real now. What made it safe is not a shader change but
+   the fact that there is weather back there to reveal. The dissolve is keyed to
+   each column's own crest, too: `uv.y` runs 1 at the skyline and 0 one fade-band
+   below it. Measured from the bottom of the strip — which is dragged far below
+   the frame so it never ends in mid-air — every pixel the player can actually
+   see sits at `uv.y > 0.85`, and a dissolve written against that coordinate
+   does precisely nothing.
 2. **The layers are a painter's stack.** They write no depth, so `renderOrder`
    runs furthest-first. Getting this backwards makes a distant range paint over
    the ridge in front of it.
@@ -122,13 +134,24 @@ palette *is* the art direction.
 
 ### The eight skies as a lighting script
 
-`js/view3d/palette.js` holds one entry per realm: sky top/mid/horizon, fog
-colour and density, light direction and colour, ambient, ground, five ridge
-tones, water, aura, robe, trim, and flags for stars / moon / aurora / cloud-sea.
-A realm change lerps every one of those over ~3 seconds. Nothing hard-cuts.
+`js/view3d/palette.js` holds one entry per realm: sky top/mid/horizon, the two
+air colours and their density, light direction and colour, ambient, ground, five
+ridge tones, a three-step `peaks` ink ramp, a `sun` colour and power for the
+ridge light, cloud and crest, water, aura, robe, trim, and flags for stars /
+moon / aurora / cloud-sea. A realm change lerps every one of those over ~3
+seconds. Nothing hard-cuts.
 
 The bright stop belongs **at** the horizon (`d.y ≈ 0`), not at the nadir — a
 dawn glows along the skyline and darkens toward the zenith.
+
+**The lerp list has to be complete.** `index.js` holds a `live` palette of
+THREE.Colors that the scene modules are handed each frame, and for a while it
+carried five fields while `scenery.js` read ten. The missing ones did not error
+and did not fall back to the realm's palette — they fell back to whatever hex
+the *material was constructed with*, so `cloud`, `cloudCrest`, `crane`,
+`blossom` and `bark` were authored per realm, wired nowhere, and the sea of
+cloud stayed the same slate grey through all eight skies. A palette entry that
+nothing reads is indistinguishable from a palette entry that is wrong.
 
 ### What each system looks like
 
@@ -155,14 +178,83 @@ from three ranks of instanced karst spires, standing cloud, a plum tree, cranes,
 and a waterfall — the stock imagery of the genre, assembled from noise and
 primitives at a cost of about a dozen draw calls.
 
+### The value ladder
+
+Everything below rests on one relationship, and it is the thing the first
+version of this landscape got backwards. An ink-wash picture is not a colour
+scheme, it is three clearly separated values:
+
+| rung | what | rule |
+| --- | --- | --- |
+| **cloud** | the brightest thing in the frame | near white; in *shan shui* the unpainted paper **is** the cloud, and everything else is read against it |
+| **sky** | the middle | a gradient from a luminous skyline to a dark zenith |
+| **peaks** | ink | always darker than the sky behind them, stepping near-black to pale as they recede |
+
+The spires used to be tinted with the **ridge** ramp. Those colours are authored
+for valley walls seen against mist and deliberately run pale at the far end;
+borrowed for a skyline they put the furthest rank *lighter* than the air behind
+it, and dropped all three ranks inside the sky's own value range. Nothing threw.
+The range was drawn exactly where it was meant to be, in colours that made it
+indistinguishable from the air — a smear where a mountain range should be, and
+no amount of adding peaks or moving them would have helped.
+
+`palette.js` now carries a separate `peaks` ramp chosen against `sky`, and
+`tests/run.js` asserts the ladder for all eight realms: peaks darker than the
+skyline by a margin, ranks monotonic near-to-far, cloud brighter than the palest
+rank by 60 levels — and, because "bright" is relative, cloud no more than 3.2×
+its own skyline, or the starry realms read as snowdrifts at noon. The invariant
+the art depends on is checked, not trusted.
+
+Two smaller things in the same family:
+
+- **Air is two colours.** Hazing every distant surface toward one grey makes a
+  summit high in the frame and a foot down in the valley converge on the same
+  value, which is what flattens a landscape into a decal. `airAt(worldY)` mixes
+  between a bright skyline air and a colder high air, and everything hazes
+  toward that.
+- **The sky's stops are packed against the horizon.** The authored camera looks
+  out and slightly *down* from a high shelf: the top of the frame is about eight
+  degrees above horizontal, so `d.y` never exceeds 0.14. Spread over the 0..0.8 a
+  sky dome usually wants, the entire visible band came out as one pale grey a
+  few levels wide and `sky.top` was never reached in play. The same three stops,
+  compressed, give a hundred levels of gradient inside the frame the game is
+  actually composed for. (The star fade had the same bug and rendered about a
+  tenth of a star.)
+
 **The spires.** A karst pillar is a near-vertical fluted wall that only pinches
 in near its summit. Tapering smoothly from the base — the obvious thing — gives
-a cone, and a field of cones reads as a row of cypress trees, so the profile
-holds full width to about 0.6 of its height and then pinches hard. A slight
-waist near the foot makes it look dissolved out of a plateau rather than piled
-up; an optional shoulder gives some pillars a lesser second summit. Each rank
-gets one geometry, spun to a random heading per instance, which is what makes a
-single mesh read as a hundred different mountains.
+a cone, and a field of cones reads as a row of cypress trees.
+
+But shaping the *geometry* only moves the problem: an `InstancedMesh` draws one
+mesh, so ninety-six instances of a carefully shaped pillar are ninety-six copies
+of the same pillar, and a repeated silhouette reads as a picket fence however
+cleverly it is scattered. Spinning each instance to a random heading does not
+help — a near-circular column has the same outline from every angle.
+
+So the mesh is a plain fluted column, each instance carries a seed, and the
+*vertex shader* carves the silhouette: taper from needle to blunt-topped tower,
+a waist above the foot, a shoulder for a lesser second summit, an overhanging
+belly on a few, and a lean off plumb. One draw call, and no two rocks alike.
+
+One trap worth recording. A pillar's instance matrix scales it about 1:20, and a
+normal pushed through that matrix comes out with its vertical component
+multiplied by twenty — normals want the inverse transpose. Every summit ended up
+facing straight at the sun and the whole range bleached white. The shader now
+converts the profile's slope into the instance's real proportions and applies
+only its rotation.
+
+**Pines on the summits.** A karst pillar with nothing on it is an abstract shape
+that could be three metres tall. Put a tree on its shoulder and it is instantly
+three hundred. They are sized as a *fraction* of the pillar's width; scaled as a
+multiple of it, as they were first written, they come out taller than the peaks
+they stand on and destroy the very cue they exist to give. Because the shader
+leans each pillar off plumb, the placement replays the same shear on the CPU —
+same seed, same arithmetic — or the trees stand beside the rock instead of on it.
+
+**A host peak.** A range with no hierarchy is a texture: the eye finds nothing to
+land on. Chinese landscape names the dominant mass 主山, the host, and everything
+else is its guest — so one pillar of the near rank is forced tall, forced
+forward, and placed on a third rather than in the middle.
 
 They are scattered in **clusters**, not uniformly. Karst erodes in massifs: one
 dominant pillar with a crowd of lesser ones at its feet, then a gap. Prominence
@@ -173,18 +265,50 @@ evenly spaced needles of even height — a picket fence, not a range.
 
 **Aerial perspective is capped, not absolute.** Exponential-squared fog is total
 by about 400 units, which is right for haze and wrong for mountains: an ink-wash
-horizon is pale, not absent. Each rank passes a `fogCap` (0.42 / 0.56 / 0.70,
-near to far) that limits how much of the fog colour it can take, so the far rank
+horizon is pale, not absent. Each rank passes a `fogCap` (0.22 / 0.42 / 0.60,
+near to far) that limits how much of the air colour it can take, so the far rank
 stays a few percent darker than the air it stands in. That residual contrast is
 the entire depth cue in a picture with no texture and no atmosphere model.
 
-**Cloud is a standing band, not a floor.** A horizontal deck under a camera
-pitched 0.17 rad is seen almost edge-on, and however shallow it is made, its far
-edge converges on the horizon — precisely where the summits are — and veils the
-whole range. Camera-facing planes occupy exactly the slice of frame they are
-given. The cloud shader ragged-cuts its own top edge with the billow mass, which
-is what makes the peaks look like they stand *in* the cloud rather than behind a
-band of it.
+The cap matters just as much at close range and for the opposite reason. The
+midground pines and rock spurs sit seventy units out, where the uncapped
+exponential already takes 40% of a bright air colour — enough to lift near-black
+rock to a mid grey. The *nearest* thing in the midground came out paler than
+ranges twenty times further away, and the depth order of the whole picture read
+backwards. They are capped too.
+
+**The feet dissolve in the shader.** Each rank fades its lowest fifth into the
+air colour, so a pillar emerges from the cloud instead of being sliced off by
+whatever plane happens to be there. This is what removes the hard horizontal cut
+across the range, and it does it without depending on a cloud deck landing in
+exactly the right place.
+
+**Cloud is a standing band, not a floor, and it is the light.** A horizontal
+deck under a camera pitched 0.17 rad is seen almost edge-on, and however shallow
+it is made, its far edge converges on the horizon — precisely where the summits
+are — and veils the whole range. Camera-facing planes occupy exactly the slice
+of frame they are given.
+
+Three things make a band of them read as a sea rather than as fog:
+
+- **It is bright.** The body was previously tinted 18% toward the haze colour,
+  which is grey on grey: the cloud disappeared, and with it the only thing
+  separating one rank of peaks from the next.
+- **Its skyline is cut by the billow field**, not by a gradient. A soft vertical
+  fade is a fog bank; a ragged edge is what makes peaks look like they stand
+  *in* something. The cut is capped just below the plane's own top edge, or
+  where the field runs high the mass is still solid at the rectangle's border
+  and the deck ends on a hard-edged pale box hanging in the frame.
+- **The body has structure.** The skyline alone is not enough — below it the
+  deck was a single flat fill, so a third of the frame came out as one unbroken
+  pale grey. A second octave breaks it into separate billows, with brightness
+  through the mass and thin gaps where it parts.
+
+**Life, because a landscape without it reads as abandoned rather than as still.**
+A skein of fourteen small birds crosses the range on a precomputed line — one
+draw call, and the eye finds a moving speck before it finds anything else. The
+cranes are the ceremony; the skein is the ordinary traffic of a valley that
+somebody lives in.
 
 ### Composing in frame space
 
@@ -292,7 +416,7 @@ This is a phone game that will sit open for hours.
 
 | Budget | Target | Measured (this build) |
 |---|---|---|
-| Draw calls | < 80 | **63** worst case (Immortal Ascension, Grand Sect, high tier) |
+| Draw calls | < 80 | **57** worst case (Immortal Ascension, Grand Sect, high tier) |
 | Total download | < 8 MB | **~1035 KB**, of which Three.js is 677 KB |
 | Downloaded art assets | prefer zero | **zero** — all geometry and shading is procedural |
 | Frame rate | 60 fps mid-range Android, 30 fps floor | quality tiers + watchdog (below) |
@@ -324,19 +448,46 @@ so a tier switch can never tear down a tribulation mid-strike.
 
 | | Low | Medium | High |
 |---|---|---|---|
-| Pixel ratio cap | 1 (×0.75 scale) | 1.5 | 2 |
+| Pixel ratio cap | 1.25 | 1.5 | 2 |
+| Render scale | ×0.85 | ×1 | ×1 |
 | Post pass | off | on | on |
-| Antialias | off | off | on |
+| Target MSAA | — | 4× | 4× |
 | Ridge layers | 3 | 5 | 5 |
 | Mist bands | 2 | 4 | 6 |
 | Qi motes | 60 | 150 | 320 |
+| Karst spires | 26 | 58 | 96 |
 | Instanced disciples | 8 | 16 | 24 |
 | Water | off | on | on |
 
+**Two things here decide whether the picture is sharp, and both used to be
+wrong.** They are the whole reason the last build looked soft, and neither is
+visible from reading the tier table alone.
+
+`renderScale` multiplies the backing store, so anything under 1 is the browser
+upscaling a smaller image — real, unrecoverable blur, not a subtle quality
+setting. `low` sat at 0.75, which on a phone reporting a pixel ratio of 3 is a
+frame drawn at a quarter of the linear resolution of the screen it is stretched
+across. And `low` was easy to fall into: `detectTier` chose it for
+`hardwareConcurrency <= 4`, but Safari does not implement `deviceMemory` at all,
+several browsers clamp `hardwareConcurrency` for fingerprinting reasons, and
+four reported cores is an ordinary laptop. Those players were handed a soft
+picture with no way to know why. Low now renders at or above native, and is
+reserved for devices that genuinely cannot hold a frame.
+
+`antialias` is a flag on the **canvas' default framebuffer**. Both tiers that
+set it also enable the post pass, which renders into a `WebGLRenderTarget`
+instead — so the flag applied to a buffer that was never drawn to, and the frame
+the player actually saw had no antialiasing whatsoever, however loudly the tier
+asked for it. `msaa` multisamples the render target the scene really goes into.
+`tests/run.js` now asserts both invariants: no tier renders below native, and
+every tier with a post pass declares a sample count.
+
 A watchdog samples frame times and moves the tier to fit the device: **down** on
-a single bad window, **up** only after three consecutive comfortable ones and at
-most twice. Once it has been forced down it stops trying to climb, so a device
-sitting on the boundary settles instead of flapping.
+a single bad window, **up** only after three consecutive comfortable ones. Once
+it has dropped it gets exactly one attempt to climb back — a transient stall (a
+shader compile, a backgrounded tab, a thermal blip) should not sentence a device
+to the upscaled tier for the rest of the session, but a device that genuinely
+cannot hold the frame has to settle rather than oscillate.
 
 The post stack is deliberately one pass: paper grain, vignette, storm darkening,
 ink dissolve, flash. No bloom. Glow is done with additive fresnel shells and
@@ -467,6 +618,27 @@ the working method is worth writing down:
    and hiding the "culprit" layers made edges *harsher*. There was no seam. The
    converse also holds — the numbers found the off-screen cranes that no amount
    of looking at the screen ever would, because they were not on it.
+7. **Probe pixels before theorising about shaders.** The rebuilt karst range
+   looked bleached white, and there was a plausible story about the sun term
+   being too strong. Reading the actual framebuffer at four points on the rock
+   returned RGB (57, 64, 75) — the peaks were correct, and it was the *sky*
+   behind them that had gone too dark. Two rounds of tuning had been aimed at
+   entirely the wrong object.
+8. **Row-mean luminance is the fastest read on a flat picture.** Twelve
+   horizontal bands, printed as numbers, say in one line what a screenshot says
+   only after study: `[87, 106, 105, 123, 130, 92, 69, 59, 71, 55, 44, 36]` is a
+   landscape with a bright cloud band and a dark valley. `[114, 117, 114, 121,
+   133, 94, ...]` — the same scene before this pass — is a picture with no
+   structure above the midline at all, and that single row of numbers is the
+   whole "it feels flat" complaint stated precisely.
+
+**What none of this catches.** Every fault in this pass was a *composition* or
+*value* fault, and the suite was green through all of them. What the suite can
+hold is the arithmetic underneath: `framing.js` inverts its own projection,
+`progress.js` maps state to scenery monotonically, the palette obeys the value
+ladder, and no quality tier renders below the resolution of the screen. Those
+are the invariants where being wrong is silent — nothing throws, the picture
+just quietly stops working — so they are the ones worth spending assertions on.
 
 ## 8. Known gaps
 

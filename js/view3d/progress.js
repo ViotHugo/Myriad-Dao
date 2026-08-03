@@ -9,9 +9,13 @@ export function sceneryProgress(vm, tier) {
   const garden = vm.sect.founded ? vm.sect.facilities.garden : 0;
   const mine = vm.sect.founded ? vm.sect.facilities.mine : 0;
   return {
-    // Ten thousand peaks: a handful at Body Tempering, the full range by
-    // Immortal Ascension.
-    peakFraction: 0.30 + realmT * 0.70,
+    // Ten thousand peaks: a range at Body Tempering, the whole world of them by
+    // Immortal Ascension. The floor used to be 0.30, which at the opening realm
+    // left about seven pillars scattered over three ranks — read as a few rocks,
+    // not as a range, and the landscape has to be worth sitting in from the
+    // first minute. The climb is what carries the progression; the floor only
+    // has to clear "this is a mountain range".
+    peakFraction: 0.52 + realmT * 0.48,
     // The sea of cloud sinks as you climb: early it is above you and hides the
     // range, by the last realms you look down on all of it.
     cloudDrop: realmT * 15,

@@ -70,7 +70,14 @@ export function createView({ canvas, onTap, onDoubleTap, settings }) {
 
   function ensureTarget(w, h) {
     if (!tier.post) { if (target) { target.dispose(); target = null; } return; }
-    if (target && target.width === w && target.height === h) return;
+    // The scene goes into this target, so this is where antialiasing has to
+    // happen. The `antialias` flag on the renderer applies to the canvas'
+    // default framebuffer, which the post path never draws into — every tier
+    // with post enabled was therefore fully aliased no matter what it asked
+    // for. Multisampling the target is the fix, and it is why the tiers carry
+    // an `msaa` count now.
+    const samples = tier.msaa || 0;
+    if (target && target.width === w && target.height === h && target.samples === samples) return;
     target?.dispose();
     target = new THREE.WebGLRenderTarget(w, h, {
       minFilter: THREE.LinearFilter,
@@ -78,6 +85,7 @@ export function createView({ canvas, onTap, onDoubleTap, settings }) {
       format: THREE.RGBAFormat,
       type: THREE.UnsignedByteType,
       depthBuffer: true,
+      samples,
     });
     postMat.uniforms.tDiffuse.value = target.texture;
     postMat.uniforms.uResolution.value.set(w, h);
@@ -122,17 +130,30 @@ export function createView({ canvas, onTap, onDoubleTap, settings }) {
 
   let realmShown = -1;
   let transition = 0; // 1 -> 0 while a realm change settles
+
+  // Every colour the scene modules read, held as live THREE.Colors that are
+  // lerped toward the target realm each frame. The list has to be complete:
+  // whatever is missing here silently falls back to whatever hex the material
+  // was constructed with, and the palette entry may as well not exist. That is
+  // exactly what happened to `cloud`, `crest`, `crane`, `blossom` and `bark` —
+  // authored per realm, wired nowhere, so the sea of cloud stayed the same
+  // slate grey through all eight skies.
+  const LIVE_COLORS = ['robe', 'trim', 'aura', 'accent', 'bark', 'blossom', 'cloud',
+    'cloudCrest', 'crane'];
   const live = {
-    robe: new THREE.Color(), trim: new THREE.Color(), aura: new THREE.Color(),
-    accent: new THREE.Color(), ridges: PALETTES[0].ridges.map(() => new THREE.Color()),
+    ridges: PALETTES[0].ridges.map(() => new THREE.Color()),
+    peaks: PALETTES[0].peaks.map(() => new THREE.Color()),
+    sun: { color: new THREE.Color(), power: 0.6 },
   };
+  for (const k of LIVE_COLORS) live[k] = new THREE.Color();
+  const scratch = new THREE.Color();
 
   function pushLive(p, k) {
-    live.robe.lerp(new THREE.Color(p.robe), k);
-    live.trim.lerp(new THREE.Color(p.trim), k);
-    live.aura.lerp(new THREE.Color(p.aura), k);
-    live.accent.lerp(new THREE.Color(p.accent), k);
-    p.ridges.forEach((c, i) => live.ridges[i].lerp(new THREE.Color(c), k));
+    for (const key of LIVE_COLORS) live[key].lerp(scratch.set(p[key]), k);
+    p.ridges.forEach((c, i) => live.ridges[i].lerp(scratch.set(c), k));
+    p.peaks.forEach((c, i) => live.peaks[i].lerp(scratch.set(c), k));
+    live.sun.color.lerp(scratch.set(p.sun.color), k);
+    live.sun.power += (p.sun.power - live.sun.power) * k;
     avatar.setPalette(live);
     sect.setPalette(live);
     scenery.setPalette(live);
