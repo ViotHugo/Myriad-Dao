@@ -31,7 +31,7 @@ point one way:
 |---|---|---|
 | **data** | `js/data.js` | Every tuned number. No logic. |
 | **engine** | `js/engine.js` | Pure state + rules. No DOM, no WebGL, no audio, no timers, no `Math.random`. Runs in Node. |
-| **view3d** | `js/view3d/*` | Reads a view model, draws. Owns no rule. |
+| **view3d** | `js/view3d/*` | Reads a view model, draws. Owns no rule. `framing.js` and `progress.js` are pure and Three-free, so the test suite can check composition and progression headlessly. |
 | **ui** | `js/ui.js` | DOM HUD. Calls engine actions, never mutates state. |
 | **audio** | `js/audio.js` | Synthesis only. |
 
@@ -148,6 +148,109 @@ dawn glows along the skyline and darkens toward the zenith.
 | Age & death | Hair and beard move through four brackets of `age / lifespan`, so a 500-year-old Nascent Soul is still in his prime. Withered desaturates the world. Forced rebirth lifts the nascent soul out and away. |
 | Reincarnation | The frame runs to ink from the outside in, then reforms at dawn. |
 
+### The landscape: ten thousand peaks
+
+The horizon is the game's other protagonist. It is built in `view3d/scenery.js`
+from three ranks of instanced karst spires, standing cloud, a plum tree, cranes,
+and a waterfall — the stock imagery of the genre, assembled from noise and
+primitives at a cost of about a dozen draw calls.
+
+**The spires.** A karst pillar is a near-vertical fluted wall that only pinches
+in near its summit. Tapering smoothly from the base — the obvious thing — gives
+a cone, and a field of cones reads as a row of cypress trees, so the profile
+holds full width to about 0.6 of its height and then pinches hard. A slight
+waist near the foot makes it look dissolved out of a plateau rather than piled
+up; an optional shoulder gives some pillars a lesser second summit. Each rank
+gets one geometry, spun to a random heading per instance, which is what makes a
+single mesh read as a hundred different mountains.
+
+They are scattered in **clusters**, not uniformly. Karst erodes in massifs: one
+dominant pillar with a crowd of lesser ones at its feet, then a gap. Prominence
+is drawn from a hard-skewed distribution (`rand()^1.8`) so each cluster gets a
+few tall pillars and many short ones, with the first of every cluster forced
+tall so no cluster comes out uniformly stunted. Uniform scattering produced
+evenly spaced needles of even height — a picket fence, not a range.
+
+**Aerial perspective is capped, not absolute.** Exponential-squared fog is total
+by about 400 units, which is right for haze and wrong for mountains: an ink-wash
+horizon is pale, not absent. Each rank passes a `fogCap` (0.42 / 0.56 / 0.70,
+near to far) that limits how much of the fog colour it can take, so the far rank
+stays a few percent darker than the air it stands in. That residual contrast is
+the entire depth cue in a picture with no texture and no atmosphere model.
+
+**Cloud is a standing band, not a floor.** A horizontal deck under a camera
+pitched 0.17 rad is seen almost edge-on, and however shallow it is made, its far
+edge converges on the horizon — precisely where the summits are — and veils the
+whole range. Camera-facing planes occupy exactly the slice of frame they are
+given. The cloud shader ragged-cuts its own top edge with the billow mass, which
+is what makes the peaks look like they stand *in* the cloud rather than behind a
+band of it.
+
+### Composing in frame space
+
+The camera is authored and fixed, so the frame — not the world — is the thing
+being composed. `view3d/framing.js` inverts the projection: name a depth and a
+point in the picture, get back the world position that lands there. Both the
+scenery and the ridge layers in `world.js` are specified that way.
+
+This is not a convenience. The world framing looks down a diagonal, so the
+visible slice of world x at z = -140 is `[-147, -65]` — nowhere near centred on
+zero. An earlier build placed the range at "x = -34, spread 210" and threw more
+than half of every rank off the right edge of the screen, which is invisible as
+a bug: nothing throws, the range just looks thin and clumped to the left.
+
+The module is free of Three.js, so the same arithmetic runs in the test suite;
+`placeAtDepth` and `frameOf` are checked to invert each other exactly, and the
+composition's contract (summits clear the HUD, feet stay above the valley) is
+asserted rather than eyeballed.
+
+The numbers that matter, all as fractions of frame height:
+
+| | v |
+|---|---|
+| HUD top bar ends | 0.12 |
+| Karst summits | 0.126 – 0.20 |
+| **Horizon of the ground plane** | **0.198** |
+| Cloud band tops | 0.21 / 0.25 / 0.30 |
+| Karst feet | 0.215 – 0.42 |
+| Ridge crests (five layers) | 0.33 – 0.44 |
+| Valley mist | 0.38 – 0.76 |
+
+The horizon is the hinge. A summit below v = 0.198 is a hill; above it, the same
+silhouette is a mountain against sky. The first version of the range put its
+summits at 0.17–0.38 — almost entirely below the horizon — and no amount of
+recolouring made it read as anything but low hills.
+
+The ridges moved to accommodate it. They used to crest above the top of the
+frame and, being opaque strips, buried everything behind them; the range was
+being drawn correctly and painted over. They are now valley walls beneath the
+skyline, which is also the truer reading of the scene — the cultivator is on a
+high shelf looking out and *down*.
+
+Both stacks interleave by render order. The ridges write no depth, so they are a
+painter's stack at -6/-9/-12/-15/-18, gapped deliberately; each spire rank and
+cloud band slots into the gap matching its depth, so a range can stand behind
+one ridge line and in front of the next. Ridge order is keyed to the layer
+index, not its slot, so dropping a middle layer at low quality cannot renumber
+the stack the scenery interleaves itself into.
+
+### The landscape as a readout
+
+The view out of the window answers "how am I doing?" before any number does.
+`view3d/progress.js` is a pure function from the view model to the scene's
+dials, so it is testable without a browser:
+
+| Cue | Driven by |
+|---|---|
+| How many peaks stand out of the cloud | realm (30% → 100%) |
+| How far the cloud sea has sunk | realm |
+| Plum in bud / full bloom / shedding | stage within the realm |
+| Petal fall rate | stage — heaviest at Peak, when a breakthrough is due |
+| Cranes on the thermals | jianghu renown |
+| Bamboo by the shelf | sect herb garden level |
+| Spirit motes over the valley | meridians opened (night realms only) |
+| The waterfall, and how wide it runs | sect mine level |
+
 ### Camera
 
 The composition is authored — there is no free-fly. Named framings
@@ -189,8 +292,8 @@ This is a phone game that will sit open for hours.
 
 | Budget | Target | Measured (this build) |
 |---|---|---|
-| Draw calls | < 80 | **29–40** (boot → Spirit Severing with a Grand Sect) |
-| Total download | < 8 MB | **~978 KB**, of which Three.js is 677 KB |
+| Draw calls | < 80 | **63** worst case (Immortal Ascension, Grand Sect, high tier) |
+| Total download | < 8 MB | **~1035 KB**, of which Three.js is 677 KB |
 | Downloaded art assets | prefer zero | **zero** — all geometry and shading is procedural |
 | Frame rate | 60 fps mid-range Android, 30 fps floor | quality tiers + watchdog (below) |
 | Boot | < 2 s | single module graph, no fetches beyond the shell |
@@ -340,7 +443,7 @@ and it is implemented exactly as specified.
 ## 7. How the visuals are checked
 
 Rendering bugs do not show up in unit tests — every one of the faults above
-passed 231 green checks while being plainly wrong on screen. They are found by
+passed a fully green suite while being plainly wrong on screen. They are found by
 looking. `tools/` has no screenshot harness (it would need a browser in CI), but
 the working method is worth writing down:
 
@@ -353,7 +456,17 @@ the working method is worth writing down:
    read the numbers** rather than guessing. Every placement bug in this build
    was solved that way: the ridges that were back-face culled, the sect hidden
    behind the foreground cliff, the pine at x=−7.4 that projected to screen
-   x=−482, the moon sitting just above the top of frame.
+   x=−482, the moon sitting just above the top of frame, the flock of cranes
+   wheeling at u = 1.4 — just off the right edge, forever.
+5. **Bisect by hiding layers.** When the range came out as pale ghosts, four
+   candidates could each have explained it. Toggling mist, cloud, water and
+   ridges off one at a time and tiling the five results made it immediate: the
+   ridges were opaque and painting over everything behind them.
+6. **Measure, do not squint.** A hard horizontal seam looked obvious at 3×
+   nearest-neighbour zoom; sampling row luminance put the largest step at 5/255,
+   and hiding the "culprit" layers made edges *harsher*. There was no seam. The
+   converse also holds — the numbers found the off-screen cranes that no amount
+   of looking at the screen ever would, because they were not on it.
 
 ## 8. Known gaps
 

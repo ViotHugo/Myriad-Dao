@@ -16,7 +16,11 @@ import {
   offlineRate, offlineCap, insightGain, lifespan, atCap, isMajor, artifactPct,
   lootMult, isFinalStage, SAVE_VERSION, data as D,
 } from '../js/engine.js';
-import { resolveTier, createWatchdog } from '../js/view3d/quality.js';
+import { resolveTier, createWatchdog, TIERS } from '../js/view3d/quality.js';
+import { sceneryProgress } from '../js/view3d/progress.js';
+import {
+  FRAMINGS, REFERENCE_ASPECT, cameraBasis, frameOf, placeAtDepth, unitsPerFrame,
+} from '../js/view3d/framing.js';
 import { mulberry32, seededRandom } from '../js/rng.js';
 import { fmt, fmtTime } from '../js/format.js';
 
@@ -1282,6 +1286,153 @@ section('Architecture — purity and determinism');
     const a = g.state.name;
     g.rename('x'.repeat(200));
     return a === 'Nameless Wanderer' && g.state.name.length === 28;
+  })());
+}
+
+section('Scenery — the landscape as a readout');
+{
+  const T = TIERS.high;
+  const vm = (patch = {}) => viewModel(Object.assign(defaultState(), patch));
+  const withSect = (facilities, patch = {}) => {
+    const st = Object.assign(defaultState(), patch);
+    st.sect = { founded: true, name: 'S', disciples: [], facilities: Object.assign(
+      { hall: 0, garden: 0, mine: 0, training: 0, pavilion: 0, forge: 0 }, facilities) };
+    return viewModel(st);
+  };
+
+  check('the range fills out as the realm rises', (() => {
+    const a = sceneryProgress(vm({ realm: 0 }), T).peakFraction;
+    const b = sceneryProgress(vm({ realm: 7 }), T).peakFraction;
+    return near(a, 0.30) && near(b, 1.0);
+  })());
+  check('the sea of cloud sinks as you climb', (() => {
+    const a = sceneryProgress(vm({ realm: 0 }), T).cloudDrop;
+    const b = sceneryProgress(vm({ realm: 7 }), T).cloudDrop;
+    return a === 0 && b > a;
+  })());
+  check('the plum blooms across the four stages and sheds at Peak', (() => {
+    const b = [0, 1, 2, 3].map((stage) => sceneryProgress(vm({ stage }), T).blossom);
+    // bare -> budding -> full -> shedding
+    return b[0] < b[1] && b[1] < b[2] && b[3] < b[2] && b[3] > b[1];
+  })());
+  check('petals fall hardest at Peak, when a breakthrough is due', (() => {
+    const r = [0, 1, 2, 3].map((stage) => sceneryProgress(vm({ stage }), T).petalRate);
+    return r[0] < r[1] && r[1] < r[2] && r[2] < r[3] && near(r[3], 1);
+  })());
+  check('cranes gather as jianghu renown climbs', (() => {
+    const low = defaultState(); low.realm = 2; low.jianghu.rank = 101;
+    const high = defaultState(); high.realm = 2; high.jianghu.rank = 1;
+    return sceneryProgress(viewModel(high), T).cranes > sceneryProgress(viewModel(low), T).cranes;
+  })());
+  check('bamboo follows the sect herb garden', (() => {
+    const none = sceneryProgress(vm({ realm: 3 }), T).bamboo;
+    const some = sceneryProgress(withSect({ garden: 4 }, { realm: 3 }), T).bamboo;
+    return none === 0 && some > 0;
+  })());
+  check('spirit motes follow the opened meridians', (() => {
+    const a = sceneryProgress(vm({ realm: 3, meridians: 0 }), T).fireflies;
+    const b = sceneryProgress(vm({ realm: 3, meridians: 12 }), T).fireflies;
+    return a === 0 && b === T.fireflies;
+  })());
+  check('the waterfall waits for a realm or a mine', (() => {
+    const early = sceneryProgress(vm({ realm: 0 }), T).waterfall;
+    const mined = sceneryProgress(withSect({ mine: 1 }, { realm: 0 }), T).waterfall;
+    const later = sceneryProgress(vm({ realm: 2 }), T).waterfall;
+    return early === false && mined === true && later === true;
+  })());
+  check('every scenery count stays inside its quality budget', (() => {
+    const st = defaultState();
+    Object.assign(st, { realm: 7, stage: 2, meridians: 12 });
+    st.jianghu.rank = 1;
+    st.sect = { founded: true, name: 'S', disciples: [],
+      facilities: { hall: 9, garden: 9, mine: 9, training: 9, pavilion: 9, forge: 9 } };
+    return ['low', 'medium', 'high'].every((name) => {
+      const t = TIERS[name];
+      const p = sceneryProgress(viewModel(st), t);
+      return p.cranes <= t.cranes && p.bamboo <= t.bamboo && p.fireflies <= t.fireflies
+        && p.peakFraction <= 1 + 1e-9;
+    });
+  })());
+}
+
+section('Framing — composing against the authored camera');
+{
+  // The scenery is placed by naming a spot in the frame, so this arithmetic is
+  // load-bearing: if it drifts, whole mountain ranges move off-screen and
+  // nothing throws. These numbers were checked against a live browser render.
+  const roundTrip = (u, v, z) => {
+    const f = frameOf(placeAtDepth(u, v, z));
+    return Math.max(Math.abs(f.u - u), Math.abs(f.v - v));
+  };
+  check('placeAtDepth inverts frameOf exactly', (() => {
+    let worst = 0;
+    for (const z of [-40, -90, -160, -300, -520]) {
+      for (const u of [0, 0.25, 0.5, 0.75, 1]) {
+        for (const v of [0.1, 0.35, 0.6, 0.9]) worst = Math.max(worst, roundTrip(u, v, z));
+      }
+    }
+    return worst < 1e-9;
+  })());
+
+  check('the world framing looks down a diagonal, not along -z', (() => {
+    // The whole reason frame-space placement exists: the visible slice of world
+    // x at a given depth is nowhere near centred on zero.
+    const left = placeAtDepth(0, 0.5, -140)[0];
+    const right = placeAtDepth(1, 0.5, -140)[0];
+    return left < -140 && right < -55 && right > left;
+  })());
+
+  check('the visible arc widens with depth', (() => {
+    const span = (z) => placeAtDepth(1, 0.5, z)[0] - placeAtDepth(0, 0.5, z)[0];
+    return span(-480) > span(-220) && span(-220) > span(-90);
+  })());
+
+  check('the horizon of the ground plane sits above frame centre', (() => {
+    const v = frameOf([0, 0, -9000]).v;
+    return v > 0.15 && v < 0.25;
+  })());
+
+  check('a point behind the camera reports as behind', (() => {
+    const b = frameOf([0, 0, 200]);
+    return b.behind === true && Number.isNaN(b.u);
+  })());
+
+  check('things at the same depth shrink no further', (() => {
+    // unitsPerFrame is how the scenery converts a frame fraction into a size.
+    const a = unitsPerFrame(-100);
+    const b = unitsPerFrame(-400);
+    return b > a && a > 0;
+  })());
+
+  check('the camera basis is orthonormal and right-handed', (() => {
+    const { x, y, z } = cameraBasis(FRAMINGS.world);
+    const dot = (p, q) => p[0] * q[0] + p[1] * q[1] + p[2] * q[2];
+    const len = (p) => Math.hypot(...p);
+    return near(len(x), 1) && near(len(y), 1) && near(len(z), 1)
+      && Math.abs(dot(x, y)) < 1e-9 && Math.abs(dot(y, z)) < 1e-9 && Math.abs(dot(x, z)) < 1e-9;
+  })());
+
+  check('every named framing can be inverted', (() => (
+    Object.values(FRAMINGS).every((f) => {
+      const p = placeAtDepth(0.5, 0.5, f.target[2] - 40, { framing: f });
+      return p !== null && p.every(Number.isFinite);
+    })
+  ))());
+
+  check('a wider screen sees more world at the same depth', (() => {
+    const narrow = placeAtDepth(1, 0.5, -200, { aspect: REFERENCE_ASPECT })[0]
+      - placeAtDepth(0, 0.5, -200, { aspect: REFERENCE_ASPECT })[0];
+    const wide = placeAtDepth(1, 0.5, -200, { aspect: 1.6 })[0]
+      - placeAtDepth(0, 0.5, -200, { aspect: 1.6 })[0];
+    return Math.abs(wide) > Math.abs(narrow);
+  })());
+
+  check('summits clear the HUD and feet stay above the shelf', (() => {
+    // The composition contract the peaks are placed against: nothing above
+    // v = 0.12 (the top bar) and nothing below v = 0.45 (the valley).
+    const summit = frameOf(placeAtDepth(0.5, 0.126, -190));
+    const foot = frameOf(placeAtDepth(0.5, 0.42, -190));
+    return summit.v > 0.12 && foot.v < 0.45;
   })());
 }
 

@@ -16,6 +16,8 @@ export const PALETTES = [
     robe: '#6b6257',
     trim: '#8f8577',
     accent: '#35c98e',
+    blossom: '#f6d3e0', bark: '#1b1519',
+    cloud: '#9aa6b4', cloudCrest: '#dde6ee', crane: '#e6ecf2',
     flags: { stars: 0, aurora: 0, moon: 0, cloudSea: 0 },
   },
   { // 1 — Qi Condensation: teal morning
@@ -30,6 +32,8 @@ export const PALETTES = [
     robe: '#2f6b63',
     trim: '#57a892',
     accent: '#35c98e',
+    blossom: '#f4cfe0', bark: '#17201f',
+    cloud: '#7fa8a6', cloudCrest: '#cfeae4', crane: '#e8f4f0',
     flags: { stars: 0, aurora: 0, moon: 0, cloudSea: 0 },
   },
   { // 2 — Foundation Establishment: amber sunset
@@ -44,6 +48,8 @@ export const PALETTES = [
     robe: '#7a3f2c',
     trim: '#d79a54',
     accent: '#e8b34b',
+    blossom: '#ffd9dc', bark: '#241416',
+    cloud: '#c98a5e', cloudCrest: '#ffe2b4', crane: '#ffeede',
     flags: { stars: 0, aurora: 0, moon: 0, cloudSea: 0 },
   },
   { // 3 — Core Formation: violet dusk
@@ -58,6 +64,8 @@ export const PALETTES = [
     robe: '#4a2f70',
     trim: '#9b74d4',
     accent: '#b07ae8',
+    blossom: '#f0cdf0', bark: '#1d1526',
+    cloud: '#8a76b4', cloudCrest: '#e2d4f4', crane: '#efe4ff',
     flags: { stars: 0.25, aurora: 0, moon: 0, cloudSea: 0 },
   },
   { // 4 — Nascent Soul: starry indigo
@@ -72,6 +80,8 @@ export const PALETTES = [
     robe: '#1e2a52',
     trim: '#6f8fd8',
     accent: '#6ea8ff',
+    blossom: '#e8d0ee', bark: '#0f1320',
+    cloud: '#39456e', cloudCrest: '#9fb0d8', crane: '#dce6ff',
     flags: { stars: 1, aurora: 0, moon: 0, cloudSea: 0 },
   },
   { // 5 — Spirit Severing: the great moon
@@ -86,6 +96,8 @@ export const PALETTES = [
     robe: '#24303f',
     trim: '#9fb8d4',
     accent: '#a9c6e8',
+    blossom: '#e6dcea', bark: '#101720',
+    cloud: '#40536c', cloudCrest: '#b6c6d8', crane: '#e2ecf6',
     flags: { stars: 0.6, aurora: 0, moon: 1, cloudSea: 0 },
   },
   { // 6 — Dao Seeking: aurora
@@ -100,6 +112,8 @@ export const PALETTES = [
     robe: '#0f3b3a',
     trim: '#4fe8c4',
     accent: '#35ffd0',
+    blossom: '#d8f2e6', bark: '#08161a',
+    cloud: '#1d4a4c', cloudCrest: '#7fd8c0', crane: '#c8fff0',
     flags: { stars: 0.8, aurora: 1, moon: 0, cloudSea: 0 },
   },
   { // 7 — Immortal Ascension: a golden sea of clouds
@@ -114,6 +128,8 @@ export const PALETTES = [
     robe: '#8a6a22',
     trim: '#ffe9a8',
     accent: '#e8b34b',
+    blossom: '#ffe6c0', bark: '#2a1e08',
+    cloud: '#b58a44', cloudCrest: '#ffeec4', crane: '#fff4d8',
     flags: { stars: 0.4, aurora: 0, moon: 0, cloudSea: 1 },
   },
 ];

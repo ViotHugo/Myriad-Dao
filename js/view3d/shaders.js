@@ -32,12 +32,21 @@ export const NOISE = /* glsl */ `
 `;
 
 // Distance fog, applied by hand so it matches the sky gradient exactly.
+//
+// `cap` is the most fog a surface is allowed to take. Exponential-squared fog
+// is total by about 400 units, which is right for haze but wrong for a range of
+// mountains: an ink-wash horizon is pale, not absent. Capping a distant rank
+// leaves it a few percent darker than the air it stands in, which is the whole
+// of how depth reads in a painting with no texture and no atmosphere model.
 export const FOG = /* glsl */ `
   uniform vec3 uFogColor;
   uniform float uFogDensity;
-  vec3 applyFog(vec3 color, float depth) {
+  vec3 applyFogCapped(vec3 color, float depth, float cap) {
     float f = 1.0 - exp(-uFogDensity * uFogDensity * depth * depth);
-    return mix(color, uFogColor, clamp(f, 0.0, 1.0));
+    return mix(color, uFogColor, clamp(f, 0.0, 1.0) * cap);
+  }
+  vec3 applyFog(vec3 color, float depth) {
+    return applyFogCapped(color, depth, 1.0);
   }
 `;
 
@@ -90,7 +99,7 @@ function envUniforms(env, extra = {}) {
  */
 export function makeInkMaterial(env, {
   color = '#5a6472', rim = 0.55, bands = null, emissive = 0, flat = false,
-  transparent = false, opacity = 1,
+  transparent = false, opacity = 1, fogCap = 1,
 } = {}) {
   return new THREE.ShaderMaterial({
     uniforms: envUniforms(env, {
@@ -99,6 +108,7 @@ export function makeInkMaterial(env, {
       uEmissive: { value: emissive },
       uOpacity: { value: opacity },
       uBandsOverride: { value: bands === null ? -1 : bands },
+      uFogCap: { value: fogCap },
     }),
     transparent,
     flatShading: flat,
@@ -120,7 +130,7 @@ export function makeInkMaterial(env, {
     `,
     fragmentShader: /* glsl */ `
       uniform vec3 uColor, uLightDir, uLightColor, uAmbient, uRimColor;
-      uniform float uRim, uEmissive, uOpacity, uBands, uBandsOverride, uDesat;
+      uniform float uRim, uEmissive, uOpacity, uBands, uBandsOverride, uDesat, uFogCap;
       ${FOG}
       varying vec3 vNormalW;
       varying vec3 vViewDir;
@@ -138,7 +148,7 @@ export function makeInkMaterial(env, {
         col += uRimColor * rim * uRim;
         col += uColor * uEmissive;
 
-        col = applyFog(col, vDepth);
+        col = applyFogCapped(col, vDepth, uFogCap);
         col = mix(col, vec3(dot(col, vec3(0.299, 0.587, 0.114))), uDesat);
         gl_FragColor = vec4(col, uOpacity);
       }
@@ -397,6 +407,123 @@ export function makeMistMaterial(env, { color = '#8d99a8', opacity = 0.16, speed
         float a = n * edge * sides * uOpacity;
         vec3 col = mix(uColor, vec3(dot(uColor, vec3(0.299, 0.587, 0.114))), uDesat);
         gl_FragColor = vec4(col, a);
+      }
+    `,
+  });
+}
+
+/* ------------------------------------------------------------ cloud sea */
+
+/**
+ * The sea of clouds the peaks rise out of — the single image that says "Mount
+ * Hua" faster than any amount of rock. Horizontal decks of billow whose tops
+ * catch the light and whose undersides stay in shadow, drifting slowly.
+ */
+export function makeCloudMaterial(env, { opacity = 0.85, scale = 0.06, speed = 0.01, vertical = false } = {}) {
+  return new THREE.ShaderMaterial({
+    transparent: true,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+    uniforms: envUniforms(env, {
+      uColor: { value: new THREE.Color('#aab6c4') },
+      uCrest: { value: new THREE.Color('#e8eef4') },
+      uOpacity: { value: opacity },
+      uScale: { value: scale },
+      uSpeed: { value: speed },
+      uVertical: { value: vertical ? 1 : 0 },
+    }),
+    vertexShader: /* glsl */ `
+      varying vec3 vWorld;
+      varying vec2 vUv;
+      void main() {
+        vUv = uv;
+        vec4 world = modelMatrix * vec4(position, 1.0);
+        vWorld = world.xyz;
+        gl_Position = projectionMatrix * viewMatrix * world;
+      }
+    `,
+    fragmentShader: /* glsl */ `
+      uniform vec3 uColor, uCrest, uFogColor;
+      uniform float uOpacity, uScale, uSpeed, uTime, uDesat, uVertical;
+      ${NOISE}
+      varying vec3 vWorld;
+      varying vec2 vUv;
+      void main() {
+        // A standing band samples x/y so its billows have shape; a flat deck
+        // samples x/z. A vertical plane sampled in x/z would only ever be
+        // streaks, because z never varies across it.
+        vec2 p = (uVertical > 0.5 ? vWorld.xy : vWorld.xz) * uScale
+               + vec2(uTime * uSpeed, uTime * uSpeed * 0.4);
+        float billow = fbm(p);
+        float detail = fbm(p * 2.7 + 11.0);
+        // A high threshold leaves gaps between billows; a low one makes the
+        // deck a solid floor.
+        float mass = smoothstep(0.42, 0.72, billow * 0.75 + detail * 0.25);
+        // Crests: where the billow is steepest it catches the light.
+        float crest = smoothstep(0.60, 0.86, billow) * 0.9;
+        // Fade the deck out at its rim so a plane edge never shows. A standing
+        // band keeps its foot solid and thins as it rises, so the mass term
+        // ragged-cuts the top into billows instead of a ruled line — that edge
+        // is the whole reason the peaks look like they stand *in* the cloud.
+        float rim = uVertical > 0.5
+          ? smoothstep(0.0, 0.12, vUv.x) * smoothstep(1.0, 0.88, vUv.x)
+            * smoothstep(0.0, 0.08, vUv.y) * smoothstep(1.0, 0.34, vUv.y)
+          : smoothstep(0.0, 0.22, vUv.x) * smoothstep(1.0, 0.78, vUv.x)
+            * smoothstep(0.0, 0.22, vUv.y) * smoothstep(1.0, 0.78, vUv.y);
+        vec3 col = mix(uColor, uCrest, crest);
+        col = mix(uFogColor, col, 0.82);
+        col = mix(col, vec3(dot(col, vec3(0.299, 0.587, 0.114))), uDesat);
+        gl_FragColor = vec4(col, mass * rim * uOpacity);
+      }
+    `,
+  });
+}
+
+/* ------------------------------------------------------------- waterfall */
+
+/** A thread of water falling into cloud: scrolling streaks, soft at both ends. */
+export function makeFallMaterial(env, { color = '#cfe0ea', opacity = 0.42, fogCap = 0.30 } = {}) {
+  return new THREE.ShaderMaterial({
+    transparent: true,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+    uniforms: envUniforms(env, {
+      uColor: { value: new THREE.Color(color) },
+      uOpacity: { value: opacity },
+      uFogCap: { value: fogCap },
+    }),
+    vertexShader: /* glsl */ `
+      varying vec2 vUv;
+      varying float vDepth;
+      void main() {
+        vUv = uv;
+        vec4 mv = modelViewMatrix * vec4(position, 1.0);
+        vDepth = -mv.z;
+        gl_Position = projectionMatrix * mv;
+      }
+    `,
+    fragmentShader: /* glsl */ `
+      uniform vec3 uColor;
+      uniform float uOpacity, uTime, uDesat, uFogCap;
+      ${NOISE}
+      ${FOG}
+      varying vec2 vUv;
+      varying float vDepth;
+      void main() {
+        // Streaks run down the ribbon far faster than they wander sideways.
+        float streak = fbm(vec2(vUv.x * 9.0, vUv.y * 2.2 - uTime * 0.55));
+        // A tighter threshold breaks the sheet into separate threads of water
+        // instead of one solid bright bar.
+        float body = smoothstep(0.46, 0.86, streak);
+        // Narrow at the lip, spreading and dissolving into the cloud below.
+        float sides = smoothstep(0.0, 0.30, vUv.x) * smoothstep(1.0, 0.70, vUv.x);
+        float head = smoothstep(0.0, 0.10, 1.0 - vUv.y);
+        float foot = smoothstep(0.0, 0.42, vUv.y);
+        // Barely fogged: falling water is the brightest thing in a grey valley,
+        // and at this distance full aerial perspective erased it completely.
+        vec3 col = applyFogCapped(uColor, vDepth, uFogCap);
+        col = mix(col, vec3(dot(col, vec3(0.299, 0.587, 0.114))), uDesat);
+        gl_FragColor = vec4(col, body * sides * head * foot * uOpacity);
       }
     `,
   });
