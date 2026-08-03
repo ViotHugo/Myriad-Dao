@@ -6,6 +6,7 @@
 import * as THREE from 'three';
 import { mulberry32 } from '../rng.js';
 import { placeAtDepth } from './framing.js';
+import { cragGeometry, stoneGeometry } from './rock.js';
 import {
   makeSkyMaterial, makeRidgeMaterial, makeInkMaterial, makeWaterMaterial,
   makeMistMaterial,
@@ -39,14 +40,24 @@ function ridgedFbm(n, x, octaves = 4) {
 }
 
 /**
- * A ridge silhouette as a triangle strip. uv.y runs 0 at the base (where it
- * dissolves into fog) to 1 at the skyline.
+ * A ridge silhouette as a triangle strip.
+ *
+ * uv.y is measured *down from each column's own crest*, 1 at the skyline and 0
+ * one `fade` band below it, going negative under that. It used to run 0 at the
+ * bottom of the skirt — but the skirt is deliberately dragged far below the
+ * frame so the strip never ends in mid-air, so "the bottom half" of the strip
+ * was entirely off-screen and everything the player could actually see sat at
+ * uv.y > 0.85. Any dissolve written against that coordinate does nothing, and
+ * the ridge stays a flat opaque slab over the whole valley. Crest-relative, the
+ * same smoothstep puts the ink where ink goes: a dark crest line thinning into
+ * the mist beneath it.
  */
-function ridgeGeometry({ width, height, depth, segments, seed, roughness = 1 }) {
+function ridgeGeometry({ width, height, depth, segments, seed, roughness = 1, fade = 1.15 }) {
   const n = noise1(seed);
   const positions = new Float32Array((segments + 1) * 2 * 3);
   const uvs = new Float32Array((segments + 1) * 2 * 2);
   const indices = [];
+  const span = Math.max(1e-3, height * fade);
 
   for (let i = 0; i <= segments; i++) {
     const t = i / segments;
@@ -57,7 +68,7 @@ function ridgeGeometry({ width, height, depth, segments, seed, roughness = 1 }) 
     const k = i * 2;
     positions[k * 3 + 0] = x; positions[k * 3 + 1] = -depth; positions[k * 3 + 2] = 0;
     positions[(k + 1) * 3 + 0] = x; positions[(k + 1) * 3 + 1] = h; positions[(k + 1) * 3 + 2] = 0;
-    uvs[k * 2 + 0] = t; uvs[k * 2 + 1] = 0;
+    uvs[k * 2 + 0] = t; uvs[k * 2 + 1] = 1 - (h + depth) / span;
     uvs[(k + 1) * 2 + 0] = t; uvs[(k + 1) * 2 + 1] = 1;
     if (i < segments) {
       indices.push(k, k + 1, k + 2, k + 1, k + 3, k + 2);
@@ -104,7 +115,7 @@ export function createWorld(env, tier) {
   // Turn a crest target into the height/base/width the strip builder wants.
   // `height` is scaled by 0.35..1.5 along the strip, so the band between the
   // highest and lowest crest is what `spread` controls.
-  const solveLayer = (L, spread = 0.075) => {
+  const solveLayer = (L, spread = 0.105) => {
     const top = placeAtDepth(0.5, L.crestV, L.z)[1];
     const bot = placeAtDepth(0.5, L.crestV + spread, L.z)[1];
     const height = (top - bot) / 1.15;
@@ -140,9 +151,13 @@ export function createWorld(env, tier) {
     // `fade` is how far up the strip the ridge's own colour takes over. High
     // values keep the ink at the crest only and let the rest drown in mist —
     // which is what stops the nearest range reading as a black slab.
-    const mat = makeRidgeMaterial(env, { fade: 0.88 - slot * 0.10, grain: 0.4 - slot * 0.05 });
+    const mat = makeRidgeMaterial(env, { fade: 0.40 - slot * 0.05, grain: 0.4 - slot * 0.05 });
     const S = solveLayer(L);
-    const mesh = new THREE.Mesh(ridgeGeometry({ ...S, seed: 1000 + idx * 37 }), mat);
+    // Nearer ranges dissolve over a taller band, so the stack recedes by the
+    // *softness* of its feet as well as by its colour.
+    const mesh = new THREE.Mesh(
+      ridgeGeometry({ ...S, seed: 1000 + idx * 37, fade: 1.9 - slot * 0.22 }), mat,
+    );
     mesh.position.set(placeAtDepth(0.5, S.crestV, S.z)[0], S.baseY, S.z);
     // These write no depth, so they are a painter's stack: the furthest layer
     // must go down first or a distant range paints over the ridge in front.
@@ -174,7 +189,7 @@ export function createWorld(env, tier) {
   // A few standing rocks, for the negative space to push against. One draw
   // call: five separate meshes here cost as much as the whole karst range.
   const ROCKS = 5;
-  const rocks = new THREE.InstancedMesh(new THREE.ConeGeometry(1, 1, 5, 1), stoneMat, ROCKS);
+  const rocks = new THREE.InstancedMesh(stoneGeometry(97), stoneMat, ROCKS);
   {
     const rrand = mulberry32(97);
     const m = new THREE.Matrix4();
@@ -186,7 +201,8 @@ export function createWorld(env, tier) {
       const r = 5.2 + rrand() * 3.4;
       const h = 0.7 + rrand() * 2.1;
       const rad = 0.35 + rrand() * 0.6;
-      v.set(Math.cos(a) * r, h / 2 - 0.1, Math.sin(a) * r);
+      // The crag hangs below its origin, so it is placed by its crown.
+      v.set(Math.cos(a) * r, h - 0.35, Math.sin(a) * r);
       q.setFromEuler(new THREE.Euler((rrand() - 0.5) * 0.25, rrand() * 3, (rrand() - 0.5) * 0.25));
       sc.set(rad, h, rad);
       rocks.setMatrixAt(i, m.compose(v, q, sc));
@@ -198,9 +214,15 @@ export function createWorld(env, tier) {
   // The midground reads as ink laid over the haze, so it takes a near-flat dark
   // material with almost no rim. Lit, mid-grey geometry out there looked like
   // paper cut-outs pasted on the sky.
-  const trunkMat = makeInkMaterial(env, { color: '#141922', rim: 0.16, bands: 2 });
-  const needleMat = makeInkMaterial(env, { color: '#18232a', rim: 0.20, bands: 2, flat: true });
-  const spurMat = makeInkMaterial(env, { color: '#151b24', rim: 0.14, bands: 2, flat: true });
+  //
+  // Capped haze, like the ranks behind them. At seventy units the uncapped
+  // exponential already takes 40% of the air colour, which lifted a near-black
+  // rock to a mid grey — so the *nearest* thing in the midground came out
+  // paler than the ranges twenty times further away, and the depth order of
+  // the whole picture read backwards.
+  const trunkMat = makeInkMaterial(env, { color: '#141922', rim: 0.16, bands: 2, fogCap: 0.22 });
+  const needleMat = makeInkMaterial(env, { color: '#18232a', rim: 0.20, bands: 2, flat: true, fogCap: 0.22 });
+  const spurMat = makeInkMaterial(env, { color: '#151b24', rim: 0.14, bands: 2, flat: true, fogCap: 0.18 });
 
   // Pines as two instanced draws rather than six meshes per tree: at two trees
   // that was twelve draw calls for scenery the player barely registers.
@@ -252,22 +274,37 @@ export function createWorld(env, tier) {
   midground.add(pineTrunks, pineNeedles);
   const pine = pineTrunks;
   // A shoulder of rock for them to stand on, mostly drowned in the haze.
-  for (const [x, y, z, r, h] of [[-39, -13, -66, 11, 11], [-52, -16, -80, 13, 12]]) {
-    const spur = new THREE.Mesh(new THREE.ConeGeometry(r, h, 6, 1), spurMat);
+  // Crags, not cones: a six-sided cone at this size is unmistakably a pyramid.
+  for (const [x, y, z, r, h] of [[-39, -11.5, -66, 9, 12], [-52, -14, -80, 11, 13]]) {
+    const spur = new THREE.Mesh(
+      cragGeometry({ seed: 200 + r, sides: 9, rings: 5, taper: 0.36, jag: 0.36, drift: 0.26 }),
+      spurMat,
+    );
     spur.position.set(x, y, z);
+    spur.scale.set(r, h, r * 0.9);
     spur.rotation.y = mrand() * Math.PI;
     midground.add(spur);
   }
   group.add(midground);
 
   /* water ------------------------------------------------------------- */
+  // A river in the valley floor, not a sea.
+  //
+  // This was a 900 x 320 plane at z = -175, and a horizontal plane that big,
+  // seen from above, has its far edge converge on the horizon: it reached
+  // v = 0.34 in the frame and painted over the entire cloud sea and both far
+  // ranks — an untextured slab across the middle of every composition. (Its
+  // ripple noise is scaled in world units, so at that distance it averages out
+  // to nothing, which is why it read as flat paint rather than as water.) Cut
+  // to the valley floor, it lands at v 0.51..0.79, under the mist, where a
+  // river belongs — and it is still the water the sect framing looks down on.
   let water = null;
   let waterMat = null;
   if (tier.water) {
     waterMat = makeWaterMaterial(env);
-    water = new THREE.Mesh(new THREE.PlaneGeometry(900, 320, 1, 1), waterMat);
+    water = new THREE.Mesh(new THREE.PlaneGeometry(320, 130, 1, 1), waterMat);
     water.rotation.x = -Math.PI / 2;
-    water.position.set(0, -26, -175);
+    water.position.set(-60, -31, -105);
     water.renderOrder = -5;
     group.add(water);
   }
@@ -309,7 +346,8 @@ export function createWorld(env, tier) {
 
   const cur = {
     top: new THREE.Color(), mid: new THREE.Color(), horizon: new THREE.Color(),
-    fog: new THREE.Color(), ambient: new THREE.Color(), light: new THREE.Color(),
+    fog: new THREE.Color(), fogHigh: new THREE.Color(),
+    ambient: new THREE.Color(), light: new THREE.Color(),
     ground: new THREE.Color(), rim: new THREE.Color(),
     waterTop: new THREE.Color(), waterHorizon: new THREE.Color(), waterTint: new THREE.Color(),
     ridges: LAYERS.map(() => new THREE.Color()),
@@ -325,6 +363,7 @@ export function createWorld(env, tier) {
     cur.mid.lerp(new THREE.Color(p.sky.mid), k);
     cur.horizon.lerp(new THREE.Color(p.sky.horizon), k);
     cur.fog.lerp(new THREE.Color(p.fog.color), k);
+    cur.fogHigh.lerp(new THREE.Color(p.fog.high || p.fog.color), k);
     cur.ambient.lerp(new THREE.Color(p.ambient), k);
     cur.light.lerp(new THREE.Color(p.light.color), k);
     cur.ground.lerp(new THREE.Color(p.ground), k);
@@ -350,6 +389,7 @@ export function createWorld(env, tier) {
     skyMat.uniforms.uAccent.value.set(p.accent);
 
     env.uFogColor.value.copy(cur.fog);
+    env.uFogHigh.value.copy(cur.fogHigh);
     env.uFogDensity.value = cur.density;
     env.uAmbient.value.copy(cur.ambient);
     env.uLightColor.value.copy(cur.light);

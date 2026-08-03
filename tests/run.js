@@ -18,6 +18,7 @@ import {
 } from '../js/engine.js';
 import { resolveTier, createWatchdog, TIERS } from '../js/view3d/quality.js';
 import { sceneryProgress } from '../js/view3d/progress.js';
+import { PALETTES, luminance } from '../js/view3d/palette.js';
 import {
   FRAMINGS, REFERENCE_ASPECT, cameraBasis, frameOf, placeAtDepth, unitsPerFrame,
 } from '../js/view3d/framing.js';
@@ -1197,15 +1198,37 @@ section('Architecture — purity and determinism');
     for (let i = 0; i < 180 + 120 * 8; i++) w(1 / 120, 'high');
     return changes === 0;
   })());
-  check('the watchdog does not flap once it has dropped', (() => {
-    // Slow, then fast: having stepped down it must not climb straight back.
+  check('the watchdog recovers at most once after dropping', (() => {
+    // Slow, then fast for a long stretch. A transient stall — a shader compile,
+    // a backgrounded tab, a thermal blip — must not sentence the device to the
+    // upscaled tier for the rest of the session, so one climb back is allowed.
+    // Exactly one: a device that genuinely cannot hold the frame has to settle
+    // rather than oscillate, and the budget is spent for good after that.
     let tier = 'high';
     let changes = 0;
     const w = createWatchdog((t) => { tier = t; changes++; });
     for (let i = 0; i < 180 + 120 * 3; i++) w(1 / 15, tier);
-    for (let i = 0; i < 120 * 12; i++) w(1 / 120, tier);
-    return tier !== 'high' && changes <= 2;
+    const afterDrop = tier;
+    for (let i = 0; i < 120 * 24; i++) w(1 / 120, tier);
+    return afterDrop === 'medium' && changes <= 2;
   })());
+  check('no tier renders below the resolution of the screen', Object.entries(TIERS).every(
+    // renderScale multiplies the backing store, so the product with pixelRatio
+    // is what the frame is actually drawn at relative to CSS pixels. Under 1
+    // means the browser is upscaling a smaller image, which is irreversible
+    // blur rather than a subtle quality trade — `low` shipped at 0.75.
+    ([, t]) => t.pixelRatio * t.renderScale >= 1,
+  ));
+
+  check('every tier that post-processes asks for multisampling', Object.entries(TIERS).every(
+    // `antialias` is a flag on the canvas' default framebuffer, and the post
+    // path renders into a WebGLRenderTarget instead — so it applies to a buffer
+    // that is never drawn to. Tiers with post need `msaa`, which multisamples
+    // the target the scene really goes into, or they get no antialiasing at all
+    // however loudly they ask for it.
+    ([, t]) => !t.post || t.msaa > 0,
+  ));
+
   check('every quality setting resolves to a real tier', (() => {
     // Regression: choosing Auto in Settings passed undefined through to the
     // renderer, which indexed TIERS[undefined] and threw mid-reconfigure.
@@ -1303,7 +1326,10 @@ section('Scenery — the landscape as a readout');
   check('the range fills out as the realm rises', (() => {
     const a = sceneryProgress(vm({ realm: 0 }), T).peakFraction;
     const b = sceneryProgress(vm({ realm: 7 }), T).peakFraction;
-    return near(a, 0.30) && near(b, 1.0);
+    // The floor has to read as a mountain range on the very first screen — at
+    // 0.30 it was about seven pillars spread over three ranks, which reads as a
+    // few rocks. The climb to a full range is what carries the progression.
+    return a >= 0.5 && a < b && near(b, 1.0);
   })());
   check('the sea of cloud sinks as you climb', (() => {
     const a = sceneryProgress(vm({ realm: 0 }), T).cloudDrop;
@@ -1353,6 +1379,57 @@ section('Scenery — the landscape as a readout');
         && p.peakFraction <= 1 + 1e-9;
     });
   })());
+}
+
+section('Palette — the ink-wash value ladder');
+{
+  // The art direction rests on one relationship, and it is a numeric one, so it
+  // is asserted rather than eyeballed. When it was only eyeballed the peaks
+  // ended up borrowing the ridge ramp — which is authored against mist and runs
+  // pale — and the furthest rank came out *lighter* than the sky behind it.
+  // Nothing threw; the range simply stopped being a range.
+  const names = PALETTES.map((_, i) => `realm ${i}`);
+
+  check('every realm carries the full lighting script', PALETTES.every((p) => (
+    Array.isArray(p.peaks) && p.peaks.length === 3
+    && typeof p.fog.high === 'string'
+    && p.sun && typeof p.sun.color === 'string' && typeof p.sun.power === 'number'
+    && typeof p.cloud === 'string' && typeof p.cloudCrest === 'string'
+  )));
+
+  check('the peaks are ink: darker than the sky they stand against', (() => (
+    PALETTES.every((p) => {
+      // The palest rank against the brightest thing it can be seen over. A
+      // margin, not a tie: a few levels apart is a smudge, not a silhouette.
+      const palest = Math.max(...p.peaks.map(luminance));
+      return palest < luminance(p.sky.horizon) - 20 && palest < 130;
+    })
+  ))(), names.filter((_, i) => {
+    const p = PALETTES[i];
+    const palest = Math.max(...p.peaks.map(luminance));
+    return !(palest < luminance(p.sky.horizon) - 20 && palest < 130);
+  }).join(', '));
+
+  check('the ranks recede: near is darkest, far is palest', PALETTES.every((p) => {
+    const [a, b, c] = p.peaks.map(luminance);
+    return a < b && b < c;
+  }));
+
+  check('cloud is the brightest thing in the frame', PALETTES.every((p) => (
+    luminance(p.cloud) > Math.max(...p.peaks.map(luminance)) + 60
+    && luminance(p.cloudCrest) > luminance(p.cloud)
+    && luminance(p.cloud) > luminance(p.sky.mid)
+  )));
+
+  check('cloud never glares out of a night sky', PALETTES.every((p) => (
+    // Bright relative to its own sky, not absolutely: at 175 against a sky of
+    // 58 the starry realms read as snowdrifts under a midday sun.
+    luminance(p.cloud) / luminance(p.sky.horizon) < 3.2
+  )));
+
+  check('the air is two colours, and the high air is the darker', PALETTES.every((p) => (
+    luminance(p.fog.high) < luminance(p.fog.color)
+  )));
 }
 
 section('Framing — composing against the authored camera');

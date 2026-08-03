@@ -10,7 +10,7 @@ framework, no downloaded art. **~1035 KB total**, and installable as a PWA.
 
 ```bash
 npm run serve     # http://localhost:8123
-npm test          # 256 engine checks
+npm test          # 264 checks
 npm run balance   # assert the A18 pacing table
 ```
 
@@ -28,11 +28,18 @@ where **the width of the window on screen literally is the probability**, and
 the marker sweeps at constant speed so a tap lands inside exactly that often.
 
 Behind it all, the ten thousand peaks: three ranks of instanced karst spires
-rising out of standing cloud, a plum tree that buds and blooms and sheds with
-the stage you are on, cranes that gather as your name spreads, and a waterfall
-that widens with your sect's mine. The landscape is a readout — how many peaks
-stand clear of the cloud is your realm, and you can read it without looking at a
-single number.
+rising out of a luminous sea of cloud, each pillar carved to its own silhouette
+in the vertex shader and crowned with pines that tell you how big it is. A plum
+tree buds and blooms and sheds with the stage you are on, cranes gather as your
+name spreads, a skein of birds crosses the range, and a waterfall widens with
+your sect's mine. The landscape is a readout — how many peaks stand clear of the
+cloud is your realm, and you can read it without looking at a single number.
+
+The whole picture is built on one relationship: cloud is the brightest thing in
+the frame, the peaks are ink and always darker than the sky behind them, and the
+ranks step from near-black to pale as they recede. That ladder is asserted in
+the test suite for all eight skies, because when it inverts nothing throws — the
+range is simply drawn in colours that make it indistinguishable from the air.
 
 Everything is synthesised or generated: the mountains from seeded ridged noise,
 the guqin from oscillators through a feedback-delay "valley echo", the icons
@@ -48,7 +55,7 @@ js/audio.js           synthesised WebAudio
 js/view3d/            Three.js: shaders, world, scenery, avatar, sect, effects, camera
 tools/balance-sim.js  plays the engine headlessly, checks pacing
 tools/make-icons.js   regenerates the PWA icons
-tests/run.js          256 checks
+tests/run.js          264 checks
 docs/DESIGN.md        art direction, performance budget, quality tiers, balance
 ```
 

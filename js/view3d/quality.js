@@ -3,14 +3,30 @@
 // This is a phone game that will sit open for hours. The budget is: under ~80
 // draw calls, capped device pixel ratio, and no rendering at all when nobody is
 // looking. Auto-detect picks a tier; the player can override it in Settings.
+//
+// Two things here decide whether the picture is sharp, and both used to be
+// wrong:
+//
+//   renderScale is a multiplier on the backing store, so anything under 1 is
+//   the browser upscaling a smaller image — real, unrecoverable blur, not a
+//   subtle quality setting. `low` sat at 0.75, which on a phone reporting a
+//   pixel ratio of 3 meant a frame drawn at a quarter of the linear resolution
+//   of the screen it was stretched across.
+//
+//   `antialias` is a flag on the *canvas* context. Both tiers that set it also
+//   set `post`, and a post pass renders into a WebGLRenderTarget instead — so
+//   the flag applied to a framebuffer that was never drawn to, and the frame
+//   the player saw had no antialiasing at all. `msaa` is the one that counts:
+//   it multisamples the render target the scene actually goes into.
 
 export const TIERS = {
   low: {
     name: 'Low',
-    pixelRatio: 1,
-    renderScale: 0.75,
+    pixelRatio: 1.25,
+    renderScale: 0.85,
     post: false,
     antialias: false,
+    msaa: 0,
     mistBands: 2,
     ridgeLayers: 3,
     qiMotes: 60,
@@ -36,6 +52,7 @@ export const TIERS = {
     renderScale: 1,
     post: true,
     antialias: false,
+    msaa: 4,
     mistBands: 4,
     ridgeLayers: 5,
     qiMotes: 150,
@@ -60,6 +77,7 @@ export const TIERS = {
     renderScale: 1,
     post: true,
     antialias: true,
+    msaa: 4,
     mistBands: 6,
     ridgeLayers: 5,
     qiMotes: 320,
@@ -88,7 +106,15 @@ export function detectTier() {
   const dpr = (typeof window !== 'undefined' && window.devicePixelRatio) || 1;
   const coarse = typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches;
 
-  if (mem <= 2 || cores <= 4) return 'low';
+  // Low renders below native resolution, so it is reserved for devices that
+  // genuinely cannot hold a frame — never handed out on a weak signal. The old
+  // `cores <= 4` swept in a great many perfectly capable desktops: Safari does
+  // not implement deviceMemory at all, several browsers clamp
+  // hardwareConcurrency for fingerprinting reasons, and four reported cores is
+  // an ordinary laptop. Those players were being given a soft, upscaled picture
+  // and no way to know why.
+  if (mem <= 2 || cores <= 2) return 'low';
+  if (coarse && mem <= 4 && cores <= 4) return 'low';
   if (!coarse && mem >= 8 && cores >= 8) return 'high';
   if (coarse && dpr >= 3 && mem >= 6 && cores >= 8) return 'high';
   return 'medium';
@@ -125,10 +151,14 @@ export function createWatchdog(onChange) {
     const idx = ORDER.indexOf(tier);
     if (idx < 0) return;
 
-    // Too slow: drop a tier immediately and stop trying to climb back.
+    // Too slow: drop a tier immediately. One chance to climb back afterwards,
+    // behind a long cooldown — a device that stutters once during a shader
+    // compile or a background tab switch should not be sentenced to the
+    // upscaled tier for the rest of the session, which is what spending every
+    // upgrade attempt on the way down amounted to.
     if ((p90 > 1 / 26 && tier === 'high') || (p90 > 1 / 22 && tier === 'medium')) {
       goodRuns = 0;
-      upgradesLeft = 0;
+      upgradesLeft = Math.min(upgradesLeft, 1);
       cooldown = 240;
       onChange(ORDER[idx - 1]);
       return;

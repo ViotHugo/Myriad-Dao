@@ -8,62 +8,56 @@ import * as THREE from 'three';
 import { mulberry32 } from '../rng.js';
 import {
   makeInkMaterial, makeCloudMaterial, makeFallMaterial, makeParticleMaterial,
-  makeGlowMaterial,
+  makeGlowMaterial, makeRockMaterial, makeMistMaterial,
 } from './shaders.js';
 import { sceneryProgress } from './progress.js';
 import { placeAtDepth } from './framing.js';
+import { cragGeometry } from './rock.js';
 
-/** Hermite smoothstep, matching the GLSL one. */
-function smoothstep01(e0, e1, x) {
-  const t = Math.min(1, Math.max(0, (x - e0) / (e1 - e0)));
-  return t * t * (3 - 2 * t);
-}
+/** GLSL `fract`, so the CPU can replay what the vertex shader does to a seed. */
+function fract1(x) { return x - Math.floor(x); }
 
 /* ==================================================================== */
 /*  geometry                                                             */
 /* ==================================================================== */
 
 /**
- * A karst spire: the sheer, fluted, top-heavy column of Zhangjiajie and the
- * Mount Hua ridgeline. Built as a ring-and-column lattice so vertical grooves
- * run its whole height — that fluting is what stops it reading as a cone.
+ * The blank a karst spire is carved from: a straight fluted column, one unit
+ * tall, with bedding ledges cut into its radius.
+ *
+ * Deliberately unshaped. All the silhouette — the taper, the waist, the
+ * shoulder, the overhang, the lean — is applied per instance in the vertex
+ * shader (see KARST_PROFILE in shaders.js), because an InstancedMesh draws one
+ * geometry and a repeated silhouette reads as a picket fence however cleverly
+ * the instances are scattered. Baking the shape here, as the first version did,
+ * bought ninety-six copies of the same rock.
+ *
+ * What stays here is what has to vary per *vertex*: the vertical ribs that make
+ * the wall fluted rather than turned on a lathe, and the horizontal ledges that
+ * say sedimentary rock. `uv.x` carries the angle around the column, so the
+ * shader never has to call atan and never picks up a seam where it wraps.
  */
-function spireGeometry({
-  seed = 1, sides = 9, rings = 20, taperStart = 0.66, taperTo = 0.14, strata = 9,
-  waist = 0.10, shoulder = 0.0,
-} = {}) {
+function karstColumn({ seed = 1, sides = 9, rings = 18, strata = 9, rib = 0.26 } = {}) {
   const rand = mulberry32(seed);
-  const flute = Array.from({ length: sides }, () => 0.80 + rand() * 0.34);
+  const ribs = Array.from({ length: sides }, () => 1 - rib * rand());
   const kinks = Array.from({ length: rings + 1 }, () => rand());
 
   const pos = [];
-  const nrm = [];
+  const uvs = [];
   const idx = [];
 
   for (let r = 0; r <= rings; r++) {
     const t = r / rings;
-    // The karst silhouette is a near-vertical wall that only pinches in near
-    // the summit. Tapering smoothly from the base — the obvious thing — gives
-    // a cone, and a field of cones reads as a row of cypress trees.
-    let wall = 1 - smoothstep01(taperStart, 1.0, t) * (1 - taperTo);
-    // Undercut: the pillar is narrowest a little above its foot, which is what
-    // makes it look like it was dissolved out of a plateau rather than piled up.
-    wall *= 1 - waist * Math.sin(Math.min(1, t / 0.45) * Math.PI);
-    // An optional shoulder — a lesser summit off the main one. Real ranges are
-    // full of them and a field of single-summit needles is not a range.
-    if (shoulder > 0) {
-      wall += shoulder * Math.exp(-Math.pow((t - 0.62) / 0.10, 2)) * 0.55;
-    }
     // Bedding planes: small steps in radius so the rock shows horizontal strata.
     const step = Math.round(t * strata) / strata;
-    const ledge = 1 + (step - t) * 0.55;
-    const wobble = 1 + (kinks[r] - 0.5) * 0.10;
+    const ledge = 1 + (step - t) * 0.5;
+    const wobble = 1 + (kinks[r] - 0.5) * 0.12;
     for (let s = 0; s <= sides; s++) {
-      const a = (s / sides) * Math.PI * 2;
-      const f = flute[s % sides];
-      const rad = wall * ledge * wobble * f;
+      const f = s / sides;
+      const a = f * Math.PI * 2;
+      const rad = ledge * wobble * ribs[s % sides];
       pos.push(Math.cos(a) * rad, t, Math.sin(a) * rad);
-      nrm.push(Math.cos(a), 0.22, Math.sin(a));
+      uvs.push(f, t);
     }
   }
   const stride = sides + 1;
@@ -73,10 +67,11 @@ function spireGeometry({
       idx.push(a, a + stride, a + 1, a + 1, a + stride, a + stride + 1);
     }
   }
-  // Cap the summit so the sky does not show through the top.
+  // Cap the summit. The shader's taper decides how wide this cap ends up, so
+  // the same mesh gives both a needle and a flat-topped mesa.
   const apex = pos.length / 3;
-  pos.push(0, 1.0 + taperTo * 0.7, 0);
-  nrm.push(0, 1, 0);
+  pos.push(0, 1, 0);
+  uvs.push(0.5, 1);
   for (let s = 0; s < sides; s++) {
     const a = rings * stride + s;
     idx.push(a, apex, a + 1);
@@ -84,8 +79,51 @@ function spireGeometry({
 
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pos), 3));
-  g.setAttribute('normal', new THREE.BufferAttribute(new Float32Array(nrm), 3));
+  g.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(uvs), 2));
   g.setIndex(idx);
+  return g;
+}
+
+/** A pine in silhouette: a bare stem and three stacked skirts. Two draws' worth
+ *  of shape in one, and the only thing in the frame that gives a peak a size. */
+function pineGeometry() {
+  const pos = [];
+  const idx = [];
+  const ring = (y, r, n) => {
+    const base = pos.length / 3;
+    for (let i = 0; i < n; i++) {
+      const a = (i / n) * Math.PI * 2;
+      pos.push(Math.cos(a) * r, y, Math.sin(a) * r);
+    }
+    return base;
+  };
+  // stem
+  const b0 = ring(0, 0.05, 4);
+  const b1 = ring(0.45, 0.035, 4);
+  for (let i = 0; i < 4; i++) {
+    const j = (i + 1) % 4;
+    idx.push(b0 + i, b1 + i, b0 + j, b0 + j, b1 + i, b1 + j);
+  }
+  // three skirts, each a shallow cone
+  for (const [y, r, h] of [[0.34, 0.42, 0.40], [0.58, 0.32, 0.36], [0.80, 0.20, 0.32]]) {
+    const base = ring(y, r, 6);
+    const tip = pos.length / 3;
+    pos.push(0, y + h, 0);
+    for (let i = 0; i < 6; i++) idx.push(base + i, tip, base + ((i + 1) % 6));
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pos), 3));
+  g.setIndex(idx);
+  g.computeVertexNormals();
+  return g;
+}
+
+/** A far bird: two swept triangles. At this distance a bird *is* its silhouette. */
+function birdGeometry() {
+  const pos = [0, 0, 0, -1, 0.34, 0.30, -0.42, 0.02, -0.10, 1, 0.34, 0.30, 0.42, 0.02, -0.10];
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pos), 3));
+  g.setIndex([0, 1, 2, 0, 4, 3]);
   g.computeVertexNormals();
   return g;
 }
@@ -178,40 +216,55 @@ export function createScenery(env, tier) {
   // a range can stand behind one ridge line and in front of the next.
   const BANDS = [
     {
-      name: 'near', order: -13, share: 0.26,
-      z: [-160, -228], color: '#1d2632', rim: 0.40, bands: 3, fogCap: 0.42,
-      foot: [0.29, 0.42], rise: [0.07, 0.28], ceiling: 0.126, clusters: 5, slender: [0.044, 0.046],
-      geo: { sides: 9, rings: 18, taperStart: 0.70, taperTo: 0.10, strata: 11, waist: 0.13, shoulder: 0.18 },
+      name: 'near', order: -13, share: 0.24,
+      z: [-165, -230], rim: 0.30, fogCap: 0.22, strata: 0.20, lean: 4.4, foot: 0.20, sun: 1.0,
+      feet: [0.40, 0.52], rise: [0.10, 0.34], ceiling: 0.115, clusters: 4, slender: [0.032, 0.034],
+      geo: { sides: 9, rings: 18, strata: 11, rib: 0.30 },
     },
     {
-      name: 'mid', order: -16, share: 0.36,
-      z: [-250, -340], color: '#2b3745', rim: 0.32, bands: 3, fogCap: 0.56,
-      foot: [0.25, 0.35], rise: [0.05, 0.205], ceiling: 0.146, clusters: 7, slender: [0.048, 0.050],
-      geo: { sides: 7, rings: 13, taperStart: 0.62, taperTo: 0.16, strata: 8, waist: 0.10, shoulder: 0.10 },
+      name: 'mid', order: -16, share: 0.34,
+      z: [-255, -345], rim: 0.24, fogCap: 0.42, strata: 0.14, lean: 3.4, foot: 0.17, sun: 0.8,
+      feet: [0.33, 0.43], rise: [0.07, 0.245], ceiling: 0.132, clusters: 6, slender: [0.036, 0.038],
+      geo: { sides: 8, rings: 14, strata: 8, rib: 0.24 },
     },
     {
-      name: 'far', order: -19, share: 0.38,
-      z: [-360, -520], color: '#3d4b5e', rim: 0.22, bands: 2, fogCap: 0.70,
-      foot: [0.215, 0.295], rise: [0.035, 0.140], ceiling: 0.164, clusters: 9, slender: [0.054, 0.056],
-      geo: { sides: 6, rings: 9, taperStart: 0.55, taperTo: 0.22, strata: 6, waist: 0.08, shoulder: 0.0 },
+      name: 'far', order: -19, share: 0.42,
+      z: [-365, -530], rim: 0.16, fogCap: 0.60, strata: 0.08, lean: 2.4, foot: 0.14, sun: 0.55,
+      feet: [0.285, 0.365], rise: [0.05, 0.175], ceiling: 0.152, clusters: 9, slender: [0.042, 0.044],
+      geo: { sides: 6, rings: 10, strata: 6, rib: 0.20 },
     },
   ];
+
+  // Where the host peak stands. A range with no hierarchy is a texture: the eye
+  // finds nothing to land on and reads the whole thing as pattern. Chinese
+  // landscape names the dominant mass 主山, the host, and everything else is its
+  // guest — so one pillar of the near rank is forced tall, forced forward, and
+  // put on a third rather than the middle.
+  const HOST = { u: 0.335, footV: 0.545, headV: 0.107, z: -158 };
 
   const peaks = new THREE.Group();
   const spireSets = [];
   const spireMats = [];
+  const summits = [];   // world positions of the tallest near/mid pillars
 
   if (tier.spires > 0) {
     BANDS.forEach((band, bi) => {
-      const count = Math.max(1, Math.round(tier.spires * band.share));
+      const count = Math.max(2, Math.round(tier.spires * band.share));
       // Aerial perspective: the far rank is paler and less contrasty, which is
       // the only cue that says "these are twenty kilometres away" in a picture
-      // with no texture and no atmosphere shader.
-      const mat = makeInkMaterial(env, {
-        color: band.color, rim: band.rim, bands: band.bands, flat: true,
-        fogCap: band.fogCap,
+      // with no texture and no atmosphere model. The colours come from the
+      // palette's `peaks` ramp, which is authored against the sky — never from
+      // the ridge ramp, which is authored against mist and runs pale.
+      const mat = makeRockMaterial(env, {
+        rim: band.rim, fogCap: band.fogCap, strata: band.strata,
+        lean: band.lean, foot: band.foot, sun: band.sun,
       });
-      const geo = spireGeometry({ seed: 11 + bi * 17, ...band.geo });
+      const geo = karstColumn({ seed: 11 + bi * 17, ...band.geo });
+      // The seed each instance is carved by. Without it every pillar in the
+      // rank is the same rock painted ninety-six times.
+      const seeds = new Float32Array(count);
+      for (let i = 0; i < count; i++) seeds[i] = rand();
+      geo.setAttribute('aSeed', new THREE.InstancedBufferAttribute(seeds, 1));
       const im = new THREE.InstancedMesh(geo, mat, count);
 
       // Massifs, not a picket fence. Karst erodes in clusters: one dominant
@@ -227,12 +280,15 @@ export function createScenery(env, tier) {
       ));
 
       for (let i = 0; i < count; i++) {
-        const z = band.z[0] + (band.z[1] - band.z[0]) * rand();
+        const host = bi === 0 && i === 0;
+        const z = host ? HOST.z : band.z[0] + (band.z[1] - band.z[0]) * rand();
         const centre = centres[i % centres.length];
         // Two uniforms summed is a cheap bell curve: dense at the cluster's
         // heart, thinning at its edges.
-        const u = centre + ((rand() + rand()) - 1) * 0.16;
-        const footV = band.foot[0] + (band.foot[1] - band.foot[0]) * rand();
+        const u = host ? HOST.u : centre + ((rand() + rand()) - 1) * 0.16;
+        const footV = host
+          ? HOST.footV
+          : band.feet[0] + (band.feet[1] - band.feet[0]) * rand();
         // Prominence is skewed hard toward the low end so each cluster gets a
         // few tall pillars and many short ones, which is what gives the range a
         // silhouette instead of a plateau. The first of every cluster is forced
@@ -240,22 +296,37 @@ export function createScenery(env, tier) {
         const lead = i < centres.length;
         const p = lead ? 0.82 + rand() * 0.18 : Math.pow(rand(), 1.8);
         const rise = band.rise[0] + (band.rise[1] - band.rise[0]) * p;
+        const headV = host ? HOST.headV : Math.max(band.ceiling, footV - rise);
         const foot = placeAtDepth(u, footV, z);
-        const head = placeAtDepth(u, Math.max(band.ceiling, footV - rise), z);
+        const head = placeAtDepth(u, headV, z);
         if (!foot || !head) continue;
 
         const h = head[1] - foot[1];
         // Karst are slender: width well under a tenth of height, or they read
         // as buttes. Thinner as they recede, so the far rank stays needle-like.
-        const w = h * (band.slender[0] + rand() * band.slender[1]);
+        const w = h * (band.slender[0] + rand() * band.slender[1]) * (host ? 1.28 : 1);
         tmpV.set(foot[0], foot[1], z);
-        // A few degrees of lean on some of them; perfectly plumb pillars look
-        // manufactured. The spin is what makes one geometry read as many.
-        tmpQ.setFromEuler(new THREE.Euler(
-          (rand() - 0.5) * 0.09, rand() * Math.PI * 2, (rand() - 0.5) * 0.11, 'YXZ',
-        ));
+        // The spin is what makes one geometry read as many; the shader's own
+        // lean does the rest, so the matrix keeps the pillar upright.
+        tmpQ.setFromEuler(new THREE.Euler(0, rand() * Math.PI * 2, 0, 'YXZ'));
         tmpS.set(w, h, w);
         im.setMatrixAt(i, tmpMat.compose(tmpV, tmpQ, tmpS));
+
+        // Remember the commanding summits: pines go up there, and a pine is the
+        // only thing in the picture that tells you how big a rock is.
+        //
+        // The shader leans each pillar off plumb, so its summit is not above its
+        // foot. Replaying that shear here — same seed, same arithmetic — is what
+        // puts the trees on the rock instead of beside it.
+        if (bi < 2 && (host || (lead && rand() < 0.75))) {
+          const lean = band.lean * w;
+          summits.push({
+            x: foot[0] + (fract1(seeds[i] * 13.77) - 0.5) * lean,
+            y: head[1],
+            z: z + (fract1(seeds[i] * 17.31) - 0.5) * lean * 0.8,
+            w,
+          });
+        }
       }
       im.instanceMatrix.needsUpdate = true;
       im.frustumCulled = false;
@@ -266,6 +337,46 @@ export function createScenery(env, tier) {
     });
   }
   group.add(peaks);
+
+  /* ------------------------------------------------- pines on the summits */
+
+  // Scale. A karst pillar with nothing on it is an abstract shape and could be
+  // three metres tall; put a tree on its shoulder and it is instantly three
+  // hundred. One instanced draw for the whole range.
+  const pineMat = makeInkMaterial(env, {
+    color: '#101820', rim: 0.30, bands: 2, flat: true, fogCap: 0.34,
+  });
+  let summitPines = null;
+  if (summits.length) {
+    const perSummit = 3;
+    summitPines = new THREE.InstancedMesh(pineGeometry(), pineMat, summits.length * perSummit);
+    let n = 0;
+    for (const s of summits) {
+      // Sized as a *fraction* of the pillar's width, never a multiple of it: a
+      // pine on a karst summit is a serration on the silhouette, a few pixels
+      // of it. Scaled the other way round they came out taller than the peaks
+      // they stand on, which not only looks absurd but destroys the very cue
+      // they are there to give.
+      //
+      // The summit is where the shader's taper leaves it, so the cap is a
+      // fraction of the pillar's full width — the trees have to crowd in.
+      const cap = s.w * 0.34;
+      for (let k = 0; k < perSummit; k++) {
+        const a = rand() * Math.PI * 2;
+        const r = cap * rand();
+        const scale = s.w * (0.13 + rand() * 0.11) * (k === 0 ? 1.45 : 1);
+        tmpV.set(s.x + Math.cos(a) * r, s.y - s.w * 0.05, s.z + Math.sin(a) * r);
+        tmpQ.setFromEuler(new THREE.Euler((rand() - 0.5) * 0.14, rand() * 6.28, (rand() - 0.5) * 0.14, 'YXZ'));
+        tmpS.set(scale, scale * (1.5 + rand() * 0.8), scale);
+        summitPines.setMatrixAt(n++, tmpMat.compose(tmpV, tmpQ, tmpS));
+      }
+    }
+    summitPines.count = n;
+    summitPines.instanceMatrix.needsUpdate = true;
+    summitPines.frustumCulled = false;
+    summitPines.renderOrder = -12;
+    group.add(summitPines);
+  }
 
   /* -------------------------------------------------- the sea of cloud */
 
@@ -279,18 +390,25 @@ export function createScenery(env, tier) {
   // whole range. A plane facing the camera instead occupies exactly the slice of
   // frame it is given, so the cloud can be told to stop at the feet of its own
   // rank and stay there.
+  // Each deck spans the strip of frame its own rank stands in, and `height`
+  // says how far up that strip the billows are allowed to reach — so the cloud
+  // pools around the feet of one rank and stops there, leaving the rank behind
+  // it clear above. Three of them, stacked, are what turn a flat grey midground
+  // into distance you can count.
   const DECKS = [
-    { z: -205, top: 0.300, bottom: 0.560, order: -11, opacity: 0.62, scale: 0.030, speed: 0.10 },
-    { z: -310, top: 0.252, bottom: 0.430, order: -14, opacity: 0.50, scale: 0.040, speed: 0.14 },
-    { z: -450, top: 0.212, bottom: 0.340, order: -17, opacity: 0.40, scale: 0.052, speed: 0.17 },
+    { z: -200, top: 0.335, bottom: 0.640, order: -11, opacity: 0.95, scale: 0.028, speed: 0.10, height: 0.92, soft: 0.20 },
+    { z: -315, top: 0.268, bottom: 0.470, order: -14, opacity: 0.88, scale: 0.040, speed: 0.14, height: 0.88, soft: 0.24 },
+    { z: -460, top: 0.212, bottom: 0.372, order: -17, opacity: 0.76, scale: 0.054, speed: 0.17, height: 0.84, soft: 0.28 },
   ];
 
   const cloudDecks = [];
   const cloudMats = [];
+  const sprayMats = [];   // mist-material puffs; they take a colour but no crest
   for (let i = 0; i < Math.min(tier.cloudDecks, DECKS.length); i++) {
     const d = DECKS[i];
     const mat = makeCloudMaterial(env, {
       opacity: d.opacity, scale: d.scale, speed: d.speed, vertical: true,
+      height: d.height, soft: d.soft,
     });
     cloudMats.push(mat);
 
@@ -329,9 +447,21 @@ export function createScenery(env, tier) {
   group.add(plum);
 
   // A shelf of rock for it to stand on, so it does not hang in the haze.
+  //
+  // This was a six-sided cone with its apex right where the trunk meets it, so
+  // the tree stood on the point of a pyramid — the most conspicuously artificial
+  // thing in the frame. A crag gives it a crown to grow out of and a broken wall
+  // that falls away below.
   const ledgeMat = makeInkMaterial(env, { color: '#232a35', rim: 0.35, bands: 2, flat: true });
-  const ledge = new THREE.Mesh(new THREE.ConeGeometry(4.6, 9, 6, 1), ledgeMat);
-  ledge.position.set(-7.9, -9.6, -16.8);
+  // Small: it is sixteen units from the camera, where a couple of world units
+  // is already a large piece of the frame. The crown sits just under the trunk
+  // and the mass falls away steeply out of the bottom of the picture.
+  const ledge = new THREE.Mesh(
+    cragGeometry({ seed: 512, sides: 10, rings: 6, taper: 0.66, jag: 0.34, drift: 0.34, crown: 0.05 }),
+    ledgeMat,
+  );
+  ledge.position.set(-7.6, -5.15, -16.5);
+  ledge.scale.set(2.9, 9.0, 2.7);
   ledge.rotation.y = 0.6;
   group.add(ledge);
 
@@ -401,6 +531,44 @@ export function createScenery(env, tier) {
   }
   if (tier.cranes > 0) group.add(cranes);
 
+  /* ---------------------------------------------------- the skein */
+
+  // A line of small birds crossing the range. Cranes are the ceremony; this is
+  // the ordinary traffic of a living valley, and it costs one draw call. A
+  // landscape with nothing moving in it does not read as still, it reads as
+  // abandoned — and the eye finds a moving speck before it finds anything else,
+  // so a dozen of them do more for the picture being *inhabited* than another
+  // fifty peaks would.
+  const BIRDS = 14;
+  const birdMat = makeInkMaterial(env, {
+    color: '#1b2129', rim: 0.20, bands: 2, flat: true, fogCap: 0.30,
+  });
+  const birds = new THREE.InstancedMesh(birdGeometry(), birdMat, BIRDS);
+  birds.frustumCulled = false;
+  birds.renderOrder = -10;
+  const birdSkein = [];
+  for (let i = 0; i < BIRDS; i++) {
+    // A ragged V: each bird trails the one ahead and a little to the side.
+    const rank = Math.floor(i / 2);
+    const side = i % 2 ? 1 : -1;
+    birdSkein.push({
+      lag: rank * (0.030 + rand() * 0.012),
+      side: side * rank * (0.9 + rand() * 0.5),
+      lift: (rand() - 0.5) * 1.8,
+      beat: rand() * 6.28,
+      scale: 0.62 + rand() * 0.3,
+    });
+  }
+  group.add(birds);
+
+  // The line they fly, solved once. Crossing the open sky just above the far
+  // rank, from off one edge to off the other — placeAtDepth is a 2×2 solve and
+  // there is no reason to run fourteen of them every frame.
+  const BIRD_Z = -300;
+  const birdFrom = placeAtDepth(-0.30, 0.205, BIRD_Z);
+  const birdTo = placeAtDepth(1.30, 0.165, BIRD_Z);
+  const birdSpan = Math.hypot(birdTo[0] - birdFrom[0], birdTo[1] - birdFrom[1]);
+
   /* ----------------------------------------------------- waterfall */
 
   let fall = null;
@@ -423,13 +591,20 @@ export function createScenery(env, tier) {
     group.add(fall);
 
     // Where it lands, it turns back into cloud.
+    //
+    // Spray is a puff, not a deck. Built on the cloud material it inherited the
+    // sea's skyline logic — a solid mass under a billow-cut horizon — and on a
+    // plane this small the billow field barely varies across it, so the mass was
+    // uniform and the "spray" rendered as a hard white bar hanging in the
+    // gorge. The mist material is the right shape for it: an fbm body that
+    // fades on all four sides and never touches its own rectangle.
+    const mistMat = makeMistMaterial(env, { opacity: 0.85, speed: 0.16 });
     fallMist = new THREE.Mesh(
-      new THREE.PlaneGeometry(fheight * 0.80, fheight * 0.30, 1, 1),
-      makeCloudMaterial(env, { opacity: 0.8, scale: 0.09, speed: 0.22, vertical: true }),
+      new THREE.PlaneGeometry(fheight * 0.72, fheight * 0.34, 1, 1), mistMat,
     );
     fallMist.position.set(fbot[0], fbot[1] + fheight * 0.05, FALL.z + 1);
     fallMist.renderOrder = -3;
-    cloudMats.push(fallMist.material);
+    sprayMats.push(mistMat);
     group.add(fallMist);
   }
 
@@ -474,10 +649,20 @@ export function createScenery(env, tier) {
   /* ==================================================================== */
 
   function setPalette(p) {
-    // Ridge colours 0/2/4 run near-to-far, so the ranks inherit the realm's own
-    // aerial perspective instead of a fixed grey.
-    const rank = [0, 2, 4];
-    spireMats.forEach((m, i) => m.uniforms.uColor.value.set(p.ridges[rank[i]] || p.ridges[0]));
+    // The peaks ramp, not the ridge ramp. The ridge colours are authored for
+    // valley walls seen against mist and run pale at the far end; borrowed for
+    // the skyline they made the furthest rank *lighter* than the air behind it,
+    // which reads as a smudge rather than as distance. See palette.js.
+    const ink = p.peaks || p.ridges;
+    spireMats.forEach((m, i) => {
+      m.uniforms.uColor.value.set(ink[Math.min(i, ink.length - 1)]);
+      if (p.sun) {
+        m.uniforms.uSunColor.value.set(p.sun.color);
+        m.uniforms.uSun.value = p.sun.power * BANDS[i].sun;
+      }
+    });
+    pineMat.uniforms.uColor.value.set(ink[0]);
+    birdMat.uniforms.uColor.value.set(ink[0]);
     barkMat.uniforms.uColor.value.set(p.bark || '#1b1519');
     blossomMat.uniforms.uColor.value.set(p.blossom || '#f6d3e0');
     petalMat.uniforms.uColor.value.set(p.blossom || '#f6d3e0');
@@ -486,6 +671,7 @@ export function createScenery(env, tier) {
       m.uniforms.uColor.value.set(p.cloud || '#aab6c4');
       m.uniforms.uCrest.value.set(p.cloudCrest || '#e8eef4');
     }
+    for (const m of sprayMats) m.uniforms.uColor.value.set(p.cloudCrest || '#e8eef4');
     if (fallMat) fallMat.uniforms.uColor.value.set(p.cloudCrest || '#cfe0ea');
     fireflyMat.uniforms.uColor.value.set(p.accent);
   }
@@ -561,6 +747,26 @@ export function createScenery(env, tier) {
       petalPos[i * 3 + 2] = -16.3 + Math.cos(life * 7.0 + s * 9.0) * 2.2 + (s - 0.5) * 4.0;
     }
     petalGeo.attributes.position.needsUpdate = true;
+
+    // The skein crosses the range and comes round again. One leader sets the
+    // line; everything behind it is that line, lagged.
+    for (let i = 0; i < BIRDS; i++) {
+      const b = birdSkein[i];
+      const k = (((t * 0.021 * wind) - b.lag) % 1 + 1) % 1;
+      const wander = Math.sin(k * 5.2 + b.beat) * 0.035;
+      tmpV.set(
+        birdFrom[0] + (birdTo[0] - birdFrom[0]) * k + b.side * birdSpan * 0.012,
+        birdFrom[1] + (birdTo[1] - birdFrom[1]) * k + (wander + b.lift * 0.006) * birdSpan,
+        BIRD_Z + b.side * 1.6,
+      );
+      // The wingbeat is the whole animation: at this size a bird is a flicker.
+      const beat = Math.sin(t * 3.1 * wind + b.beat + b.lag * 9.0);
+      const sc = b.scale * birdSpan * 0.011;
+      tmpQ.setFromEuler(new THREE.Euler(beat * 0.30, 0.16, 0, 'YXZ'));
+      tmpS.set(sc, sc * (0.55 + Math.abs(beat) * 0.75), sc);
+      birds.setMatrixAt(i, tmpMat.compose(tmpV, tmpQ, tmpS));
+    }
+    birds.instanceMatrix.needsUpdate = true;
 
     // Cranes ride a slow circle, banking into the turn.
     for (let i = 0; i < cranes.count; i++) {
