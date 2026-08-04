@@ -18,12 +18,16 @@ import {
 } from '../js/engine.js';
 import { resolveTier, createWatchdog, TIERS } from '../js/view3d/quality.js';
 import { sceneryProgress } from '../js/view3d/progress.js';
-import { PALETTES, luminance } from '../js/view3d/palette.js';
+import { PALETTES, luminance, LUMA, mixHex, paletteAt } from '../js/view3d/palette.js';
+import { CAMERA } from '../js/view3d/camera-config.js';
 import {
   FRAMINGS, REFERENCE_ASPECT, cameraBasis, frameOf, placeAtDepth, unitsPerFrame,
+  horizonV, composition, contactSheetPlan,
 } from '../js/view3d/framing.js';
+import { debugEnabled } from '../js/view3d/dev-flag.js';
 import { mulberry32, seededRandom } from '../js/rng.js';
 import { fmt, fmtTime } from '../js/format.js';
+import { readFileSync } from 'node:fs';
 
 /* -------------------------------------------------------------- harness */
 
@@ -1464,9 +1468,11 @@ section('Framing — composing against the authored camera');
     return span(-480) > span(-220) && span(-220) > span(-90);
   })());
 
-  check('the horizon of the ground plane sits above frame centre', (() => {
+  check('a ground point at infinity converges on the horizon line', (() => {
+    // frameOf on a very distant point and horizonV on the framing are two
+    // different derivations of the same line; they have to agree.
     const v = frameOf([0, 0, -9000]).v;
-    return v > 0.15 && v < 0.25;
+    return Math.abs(v - horizonV(FRAMINGS.world)) < 1e-3;
   })());
 
   check('a point behind the camera reports as behind', (() => {
@@ -1504,12 +1510,320 @@ section('Framing — composing against the authored camera');
     return Math.abs(wide) > Math.abs(narrow);
   })());
 
-  check('summits clear the HUD and feet stay above the shelf', (() => {
-    // The composition contract the peaks are placed against: nothing above
-    // v = 0.12 (the top bar) and nothing below v = 0.45 (the valley).
-    const summit = frameOf(placeAtDepth(0.5, 0.126, -190));
-    const foot = frameOf(placeAtDepth(0.5, 0.42, -190));
-    return summit.v > 0.12 && foot.v < 0.45;
+  check('summits clear the status bar and feet clear the UI', (() => {
+    // The composition contract the peaks are placed against, read off the
+    // locked safe zones rather than off two numbers typed into a test.
+    const summit = frameOf(placeAtDepth(0.5, CAMERA.safeZone.top + 0.006, -190));
+    const foot = frameOf(placeAtDepth(0.5, 1 - CAMERA.safeZone.bottom - 0.01, -190));
+    return summit.v > CAMERA.safeZone.top && foot.v < 1 - CAMERA.safeZone.bottom;
+  })());
+}
+
+/* ============================================ Stage 0 — the locked camera */
+
+section('Camera lock — the composition contract');
+{
+  const HERO = FRAMINGS.world;
+  const want = CAMERA.composition;
+  const tol = want.tolerance;
+  const hero = composition(HERO);
+
+  check('the lens is a 45° perspective on a portrait frame',
+    CAMERA.fov === 45 && HERO.fov === CAMERA.fov
+    && CAMERA.referenceAspect < 1 && near(CAMERA.referenceAspect, 414 / 896),
+    `fov ${CAMERA.fov}/${HERO.fov}, aspect ${CAMERA.referenceAspect.toFixed(4)}`);
+
+  check('near and far planes come from the config too',
+    CAMERA.near > 0 && CAMERA.far > CAMERA.near);
+
+  check('the horizon sits at 45% of frame height',
+    Math.abs(hero.horizonV - want.horizonV) <= tol.horizonV,
+    `horizon at ${(hero.horizonV * 100).toFixed(2)}%`);
+
+  check('the horizon is explicitly not centred',
+    Math.abs(hero.horizonV - 0.5) > 0.02 && hero.horizonV < 0.5,
+    `${(hero.horizonV * 100).toFixed(2)}% down the frame`);
+
+  check('the horizon does not move with screen width', (() => {
+    // It is a property of the lens and the tilt, so a tablet and a phone see
+    // it in the same place. Aspect is not even an input.
+    const a = horizonV(HERO);
+    return [0.35, REFERENCE_ASPECT, 1, 1.9].every((aspect) => (
+      Math.abs(composition(HERO, { aspect }).horizonV - a) < 1e-12
+    ));
+  })());
+
+  check('the horizon is one straight line, whichever way you face', (() => {
+    // Any horizontal direction at infinity has to land on it, or the camera
+    // has picked up a roll and the whole frame is tilted.
+    const far = [[0, 0, -9000], [9000, 0, 0], [-6000, 0, -6000], [3000, 0, 8000]];
+    const vs = far.map((p) => frameOf(p)).filter((f) => !f.behind).map((f) => f.v);
+    return vs.length >= 2 && Math.max(...vs) - Math.min(...vs) < 2e-3;
+  })());
+
+  check('the character anchor lands 60–62% down the frame',
+    hero.anchorV >= 0.60 && hero.anchorV <= 0.62,
+    `anchor at ${(hero.anchorV * 100).toFixed(2)}%`);
+
+  check('the character occupies 12–15% of frame height',
+    hero.characterHeightV >= 0.12 && hero.characterHeightV <= 0.15,
+    `figure is ${(hero.characterHeightV * 100).toFixed(2)}% tall`);
+
+  check('the anchor is off centre horizontally',
+    Math.abs(hero.anchorU - want.anchorU) <= tol.anchorU && Math.abs(hero.anchorU - 0.5) > 0.02,
+    `u = ${hero.anchorU.toFixed(3)}`);
+
+  check('she stands below the horizon and her head does not cross it',
+    hero.anchorV > hero.horizonV && hero.characterTopV > hero.horizonV,
+    `head ${hero.characterTopV.toFixed(3)} vs horizon ${hero.horizonV.toFixed(3)}`);
+
+  check('the whole figure is clear of both safe zones',
+    hero.characterTopV > CAMERA.safeZone.top
+    && hero.anchorV < 1 - CAMERA.safeZone.bottom,
+    `figure spans ${hero.characterTopV.toFixed(3)}–${hero.anchorV.toFixed(3)}`);
+
+  check('the safe zones are the reserved bands and they do not meet',
+    CAMERA.safeZone.top === 0.12 && CAMERA.safeZone.bottom === 0.30
+    && CAMERA.safeZone.top + CAMERA.safeZone.bottom < 1);
+
+  check('the contract still holds on a wider phone', (() => {
+    // Vertical composition is aspect-independent; a 9:16 handset and a taller
+    // 3:4 one must agree, or "60% down the frame" means nothing.
+    const wide = composition(HERO, { aspect: 0.75 });
+    return Math.abs(wide.anchorV - hero.anchorV) < 1e-9
+      && Math.abs(wide.characterHeightV - hero.characterHeightV) < 1e-9;
+  })());
+
+  check('every framing states a full pose and a lens', (() => (
+    Object.values(FRAMINGS).every((f) => (
+      Array.isArray(f.target) && f.target.length === 3 && f.target.every(Number.isFinite)
+      && Number.isFinite(f.dist) && Number.isFinite(f.yaw) && Number.isFinite(f.pitch)
+      && Number.isFinite(f.fov) && Number.isFinite(f.drift) && f.dist > 0
+    ))
+  ))());
+
+  check('there is one camera config and the framings live inside it',
+    FRAMINGS === CAMERA.framings && REFERENCE_ASPECT === CAMERA.referenceAspect);
+
+  check('every lens is derived from the one fov', (() => {
+    // Each framing's fov is written as FOV ± n, so a whole-number offset from
+    // 45 is the fingerprint of a value that came from the config rather than
+    // from somebody's fingers.
+    const offsets = Object.values(FRAMINGS).map((f) => f.fov - CAMERA.fov);
+    return offsets.every((d) => Number.isInteger(d) && Math.abs(d) <= 15);
+  })());
+
+  check('no lens number is left anywhere else in the renderer', (() => {
+    // The gate: camera values in one object, not scattered literals. A
+    // PerspectiveCamera built with a number instead of CAMERA.fov is exactly
+    // the regression this is here to catch.
+    const src = readFileSync(new URL('../js/view3d/index.js', import.meta.url), 'utf8');
+    const ctor = src.match(/new THREE\.PerspectiveCamera\(([^)]*)\)/);
+    return !!ctor && /CAMERA\.fov/.test(ctor[1]) && /CAMERA\.near/.test(ctor[1])
+      && /CAMERA\.far/.test(ctor[1]);
+  })());
+}
+
+section('Camera lock — the QA cameras');
+{
+  const presets = CAMERA.debugPresets;
+
+  check('there are four fixed presets, named', presets.length === 4
+    && ['hero', 'wide', 'close', 'profile'].every((id) => presets.some((p) => p.id === id)));
+
+  check('every preset holds the locked horizon', presets.every((p) => (
+    Math.abs(composition(p.framing).horizonV - CAMERA.composition.horizonV)
+      <= CAMERA.composition.tolerance.horizonV
+  )), presets.map((p) => `${p.id} ${composition(p.framing).horizonV.toFixed(3)}`).join(', '));
+
+  check('the hero preset is the hero framing', (() => {
+    const h = presets.find((p) => p.id === 'hero').framing;
+    const w = FRAMINGS.world;
+    return h.dist === w.dist && h.yaw === w.yaw && h.pitch === w.pitch && h.fov === w.fov
+      && h.target.every((n, i) => n === w.target[i]);
+  })());
+
+  check('presets do not breathe, so a capture is repeatable',
+    presets.every((p) => p.framing.drift === 0));
+
+  check('the presets step the figure through four sizes', (() => {
+    // wide < hero ≈ profile < close, and all four distinct enough to tell
+    // apart at a glance on the sheet.
+    const h = (id) => composition(presets.find((p) => p.id === id).framing).characterHeightV;
+    return h('wide') < h('hero') && h('hero') < h('close') && h('close') > 0.25 && h('wide') < 0.06;
+  })());
+
+  check('the figure stays on screen in every preset', presets.every((p) => {
+    const c = composition(p.framing);
+    return c.characterTopV > 0 && c.anchorV < 1 && c.anchorU > 0 && c.anchorU < 1;
+  }));
+}
+
+section('Camera lock — the contact sheet');
+{
+  const plan = contactSheetPlan();
+
+  check('the sheet is four cameras by four skies',
+    plan.rows === 4 && plan.columns === 4 && plan.rows * plan.columns === 16);
+
+  check('the plan produces sixteen frames', plan.cells.length === 16,
+    `${plan.cells.length} cells`);
+
+  check('every frame is labelled, and no two labels collide',
+    new Set(plan.cells.map((c) => c.label)).size === 16
+    && plan.cells.every((c) => /\S+ · \S+/.test(c.label)));
+
+  check('the sheet walks the whole day', (() => {
+    const ts = CAMERA.timesOfDay.map((t) => t.t);
+    return ts.length === 4 && ts[0] === 0 && ts[3] === 1
+      && ts.every((t, i) => i === 0 || t > ts[i - 1]);
+  })());
+
+  check('each sampled time lands on an authored sky, not between two', (() => {
+    // A cell that looks wrong should be a palette that is wrong, not an
+    // artefact of blending — so every column sits exactly on a palette index.
+    const n = PALETTES.length - 1;
+    return CAMERA.timesOfDay.every((t) => Math.abs(t.t * n - Math.round(t.t * n)) < 1e-9);
+  })());
+
+  check('the plan is pure — no renderer, no DOM', (() => {
+    const src = readFileSync(new URL('../js/view3d/framing.js', import.meta.url), 'utf8');
+    return !/\bthree\b|document\.|window\./.test(src);
+  })());
+}
+
+section('Camera lock — grayscale is true luminance');
+{
+  // Only the post pass — shaders.js is a dozen materials and several of them
+  // end on the same line of GLSL, so an unscoped indexOf finds the wrong one.
+  const shaders = readFileSync(new URL('../js/view3d/shaders.js', import.meta.url), 'utf8');
+  const post = shaders.slice(shaders.indexOf('export function makePostMaterial'));
+
+  check('the luminance weights are Rec. 601 and sum to one',
+    LUMA.length === 3 && Math.abs(LUMA.reduce((a, b) => a + b, 0) - 1) < 1e-9
+    && LUMA[1] > LUMA[0] && LUMA[0] > LUMA[2]);
+
+  check('luminance() uses the shared weights', (() => {
+    const white = luminance('#ffffff');
+    const red = luminance('#ff0000');
+    const green = luminance('#00ff00');
+    const blue = luminance('#0000ff');
+    return near(white, 255) && near(red, LUMA[0] * 255)
+      && near(green, LUMA[1] * 255) && near(blue, LUMA[2] * 255);
+  })());
+
+  check('the post pass converts with those same weights', (() => {
+    // Two rulers would be worse than none: QA would pass what the suite fails.
+    // The GLSL interpolates LUMA rather than restating it, which is what makes
+    // that impossible — so that is what gets asserted.
+    const wired = `dot(col, vec3(\${LUMA[0]}, \${LUMA[1]}, \${LUMA[2]}))`;
+    return post.includes(wired) && !/vec3\(\s*0\.299\s*,/.test(shaders);
+  })());
+
+  check('grayscale is the last thing that happens to the frame', (() => {
+    // Applied before the flash or the vignette it would be measuring a picture
+    // the player never sees.
+    return post.indexOf('uGrayscale > 0.0') > post.indexOf('uFlashColor, clamp(uFlash')
+      && post.indexOf('uGrayscale > 0.0') < post.indexOf('gl_FragColor = vec4(col, 1.0)');
+  })());
+
+  check('the toggle ships off', /uGrayscale: \{ value: 0 \}/.test(post));
+
+  check('it survives a tier with no post pass', (() => {
+    // `low` renders straight to the canvas, so the grayscale toggle has to be
+    // able to force the post target into existence or the primary QA
+    // instrument silently does nothing on the tier that needs it most.
+    const src = readFileSync(new URL('../js/view3d/index.js', import.meta.url), 'utf8');
+    return TIERS.low.post === false && /forcePost/.test(src)
+      && /function setGrayscale/.test(src) && /postOn\(\)/.test(src);
+  })());
+}
+
+section('Camera lock — the day as a dial');
+{
+  check('the dial ends on the first and last sky', (() => {
+    const a = paletteAt(0);
+    const b = paletteAt(1);
+    return a.sky.top === PALETTES[0].sky.top && b.sky.top === PALETTES[PALETTES.length - 1].sky.top;
+  })());
+
+  check('it is clamped, not wrapped',
+    paletteAt(-3).sky.top === PALETTES[0].sky.top
+    && paletteAt(9).sky.top === PALETTES[PALETTES.length - 1].sky.top);
+
+  check('every stop on the dial is a whole palette', (() => {
+    const keys = Object.keys(PALETTES[0]).sort().join(',');
+    for (let i = 0; i <= 40; i++) {
+      const p = paletteAt(i / 40);
+      if (Object.keys(p).sort().join(',') !== keys) return false;
+      if (p.ridges.length !== 5 || p.peaks.length !== 3) return false;
+      if (!/^#[0-9a-f]{6}$/.test(p.cloud) || !/^#[0-9a-f]{6}$/.test(p.sky.horizon)) return false;
+      if (!Number.isFinite(p.fog.density) || p.light.dir.length !== 3) return false;
+    }
+    return true;
+  })());
+
+  check('the value ladder survives everywhere between the skies', (() => {
+    // Blending is linear and luminance is linear in RGB, so a ladder that
+    // holds at both ends holds all the way across. Asserted, not assumed —
+    // this is the invariant the whole art direction stands on.
+    for (let i = 0; i <= 60; i++) {
+      const p = paletteAt(i / 60);
+      const palest = Math.max(...p.peaks.map(luminance));
+      if (!(luminance(p.cloud) > palest + 55)) return false;
+      if (!(luminance(p.cloudCrest) > luminance(p.cloud))) return false;
+      if (!(palest < luminance(p.sky.horizon))) return false;
+    }
+    return true;
+  })());
+
+  check('mixing a colour with itself changes nothing',
+    mixHex('#3c4552', '#3c4552', 0.37) === '#3c4552'
+    && mixHex('#000000', '#ffffff', 0) === '#000000'
+    && mixHex('#000000', '#ffffff', 1) === '#ffffff');
+
+  check('a midpoint mix is the midpoint', mixHex('#000000', '#ffffff', 0.5) === '#808080');
+
+  check('the scrubber never repaints while the game owns the sky', (() => {
+    const src = readFileSync(new URL('../js/view3d/index.js', import.meta.url), 'utf8');
+    return /timeOverride/.test(src) && /if \(timeOverride !== null\) return;/.test(src);
+  })());
+}
+
+section('Camera lock — the harness ships to nobody');
+{
+  const sw = readFileSync(new URL('../sw.js', import.meta.url), 'utf8');
+  const main = readFileSync(new URL('../js/main.js', import.meta.url), 'utf8');
+
+  check('camera-config.js is in the service worker shell',
+    sw.includes("'./js/view3d/camera-config.js'"));
+
+  check('debug.js is not', !sw.includes("'./js/view3d/debug.js'"));
+
+  check('the panel is imported dynamically, and only in a dev build',
+    /if \(DEBUG\) \{/.test(main) && /import\('\.\/view3d\/debug\.js'\)/.test(main)
+    && !/^import .*debug\.js/m.test(main));
+
+  check('the dev-build predicate is written once', (() => {
+    // main.js needs it before the WebGL context exists and debug.js needs it
+    // too; two copies would drift, and the day they disagree the capture tool
+    // starts returning blank frames in one build and not another.
+    const dbg = readFileSync(new URL('../js/view3d/debug.js', import.meta.url), 'utf8');
+    return /import \{ debugEnabled \} from '\.\/view3d\/dev-flag\.js'/.test(main)
+      && /export \{ debugEnabled \} from '\.\/dev-flag\.js'/.test(dbg)
+      && !/localhost/.test(main) && !/localhost/.test(dbg);
+  })());
+
+  check('a shipped build pays nothing for the drawing buffer', (() => {
+    const src = readFileSync(new URL('../js/view3d/index.js', import.meta.url), 'utf8');
+    return /preserveDrawingBuffer: !!debug/.test(src);
+  })());
+
+  check('localhost and ?debug turn it on; a real host does not', (() => {
+    const on = (search, hostname) => debugEnabled({ search, hostname });
+    return on('?debug=1', 'example.com') && on('?x=1&debug', 'example.com')
+      && on('', 'localhost') && on('', '127.0.0.1')
+      && !on('', 'viothugo.github.io') && !on('?nodebugging=1', 'viothugo.github.io');
   })());
 }
 

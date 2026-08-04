@@ -32,21 +32,29 @@ export function createCameraRig(camera, canvas, { onTap, onDoubleTap, reducedMot
   let framing = 'world';
   let blend = 1; // 1 = settled
 
-  function setFraming(name, instant = false) {
-    const f = FRAMINGS[name] || FRAMINGS.world;
-    framing = name;
+  /** Move to a framing object directly — the debug presets are not named. */
+  function setPose(f, instant = false) {
     goal.target.set(...f.target);
     goal.dist = f.dist;
     goal.yaw = f.yaw;
     goal.pitch = f.pitch;
     goal.fov = f.fov;
-    goal.drift = f.drift;
+    goal.drift = f.drift ?? 1;
     blend = instant ? 1 : 0;
     if (instant) {
       cur.target.copy(goal.target);
       cur.dist = goal.dist; cur.yaw = goal.yaw; cur.pitch = goal.pitch; cur.fov = goal.fov;
       cur.drift = goal.drift;
+      // A still has to be a still. The breath is a function of driftT, so a
+      // capture that did not rewind it would land somewhere along the sine and
+      // two runs would not match.
+      driftT = 0;
     }
+  }
+
+  function setFraming(name, instant = false) {
+    framing = name;
+    setPose(FRAMINGS[name] || FRAMINGS.world, instant);
   }
 
   /* -------------------------------------------------------------- input */
@@ -179,8 +187,16 @@ export function createCameraRig(camera, canvas, { onTap, onDoubleTap, reducedMot
   }
 
   return {
-    update, setFraming, dispose,
+    update, setFraming, setPose, dispose,
     get framing() { return framing; },
+    /** The framing the rig is heading for, as a plain object — for QA readouts. */
+    get pose() {
+      return {
+        target: [goal.target.x, goal.target.y, goal.target.z],
+        dist: goal.dist, yaw: goal.yaw, pitch: goal.pitch, fov: goal.fov, drift: goal.drift,
+      };
+    },
+    get nudged() { return hasUserOffset(); },
     reset() { user.yaw = 0; user.pitch = 0; user.zoom = 1; },
   };
 }

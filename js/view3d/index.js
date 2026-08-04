@@ -6,7 +6,8 @@
 
 import * as THREE from 'three';
 import { createEnv, makePostMaterial } from './shaders.js';
-import { PALETTES } from './palette.js';
+import { PALETTES, paletteAt } from './palette.js';
+import { CAMERA } from './camera-config.js';
 import { TIERS, resolveTier, createWatchdog } from './quality.js';
 import { createWorld } from './world.js';
 import { createAvatar } from './avatar.js';
@@ -27,7 +28,7 @@ const RARITY_COLORS = {
 // colours in palette.js are exactly the colours on screen.
 THREE.ColorManagement.enabled = false;
 
-export function createView({ canvas, onTap, onDoubleTap, settings }) {
+export function createView({ canvas, onTap, onDoubleTap, settings, debug = false }) {
   /* ------------------------------------------------------------- setup */
 
   let tierName = resolveTier(settings?.quality);
@@ -40,6 +41,11 @@ export function createView({ canvas, onTap, onDoubleTap, settings }) {
     alpha: false,
     stencil: false,
     depth: true,
+    // Only when the debug harness is on. The contact sheet reads the canvas
+    // back sixteen times in one synchronous burst, and a drawing buffer the
+    // browser is free to discard between renders makes that a coin toss.
+    // Everybody else pays nothing for it.
+    preserveDrawingBuffer: !!debug,
   });
   renderer.outputColorSpace = THREE.LinearSRGBColorSpace; // pass-through; see above
   renderer.setClearColor(0x0b0e12, 1);
@@ -48,7 +54,9 @@ export function createView({ canvas, onTap, onDoubleTap, settings }) {
   renderer.info.autoReset = false;
 
   const scene = new THREE.Scene();
-  const camera = new THREE.PerspectiveCamera(42, 1, 0.5, 900);
+  // Every one of these comes from camera-config.js. There are no lens numbers
+  // anywhere else in the renderer.
+  const camera = new THREE.PerspectiveCamera(CAMERA.fov, 1, CAMERA.near, CAMERA.far);
 
   const env = createEnv();
   // Rebuildable: a tier change swaps these out wholesale (see setQuality).
@@ -68,8 +76,14 @@ export function createView({ canvas, onTap, onDoubleTap, settings }) {
   postScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), postMat));
   let target = null;
 
+  // The grayscale QA pass lives in the post shader, so on a tier that ships
+  // without post there would be nothing to put it in. Turning it on forces the
+  // target into existence for as long as the debug toggle is held.
+  let forcePost = false;
+  const postOn = () => tier.post || forcePost;
+
   function ensureTarget(w, h) {
-    if (!tier.post) { if (target) { target.dispose(); target = null; } return; }
+    if (!postOn()) { if (target) { target.dispose(); target = null; } return; }
     // The scene goes into this target, so this is where antialiasing has to
     // happen. The `antialias` flag on the renderer applies to the canvas'
     // default framebuffer, which the post path never draws into — every tier
@@ -160,17 +174,29 @@ export function createView({ canvas, onTap, onDoubleTap, settings }) {
     effects.setPalette(live);
   }
 
+  /** The realm's own palette, clamped — the sky the game says we are under. */
+  const realmPalette = () => PALETTES[Math.max(0, Math.min(PALETTES.length - 1, realmShown))];
+
   function setRealm(realm, instant = false) {
     if (realm === realmShown) return;
     realmShown = realm;
-    const p = PALETTES[Math.max(0, Math.min(PALETTES.length - 1, realm))];
+    // While the debug scrubber holds the sky, the game may still break through
+    // a realm underneath it. Remember which one; do not repaint over the dial.
+    if (timeOverride !== null) return;
     if (instant) {
-      world.applyPalette(p, true);
-      pushLive(p, 1);
+      world.applyPalette(realmPalette(), true);
+      pushLive(realmPalette(), 1);
       transition = 0;
     } else {
       transition = 1;
     }
+  }
+
+  /** Paint a palette on with no transition — used by the scrubber and by capture. */
+  function paintNow(p) {
+    world.applyPalette(p, true);
+    pushLive(p, 1);
+    transition = 0;
   }
 
   /* ----------------------------------------------------------- minigames */
@@ -251,6 +277,13 @@ export function createView({ canvas, onTap, onDoubleTap, settings }) {
   let vmCache = null;
   const watchdog = createWatchdog((next) => setQuality(next));
 
+  // QA state. All three are inert unless the debug harness touches them.
+  let timeOverride = null;   // 0..1 on the scrubber, or null for "the game decides"
+  let poseOverride = null;   // a debug preset holding the camera
+  let wantFraming = 'world'; // the framing the game last asked for
+  let capturing = false;
+  let fps = 60;
+
   /** Free every geometry and material under a group before dropping it. */
   function disposeGroup(root) {
     root.traverse((o) => {
@@ -276,10 +309,12 @@ export function createView({ canvas, onTap, onDoubleTap, settings }) {
     scenery = createScenery(env, tier);
     effects = createEffects(env, tier);
     scene.add(world.group, avatar.group, sect.group, scenery.group, effects.group);
-    // Repaint the new geometry with the realm we are actually in.
-    const p = PALETTES[Math.max(0, Math.min(PALETTES.length - 1, realmShown))];
-    if (realmShown >= 0) { world.applyPalette(p, true); pushLive(p, 1); }
+    // Repaint the new geometry with the sky we are actually under — which is
+    // the scrubber's, if QA is holding one.
+    if (timeOverride !== null) paintNow(paletteAt(timeOverride));
+    else if (realmShown >= 0) { world.applyPalette(realmPalette(), true); pushLive(realmPalette(), 1); }
     if (vmCache) { avatar.sync(vmCache, RARITY_COLORS); sect.sync(vmCache); scenery.sync(vmCache); }
+    setWireframe(wireframe);
   }
 
   function setQuality(setting) {
@@ -320,7 +355,7 @@ export function createView({ canvas, onTap, onDoubleTap, settings }) {
     env.uTime.value = clock;
     renderer.info.reset();
 
-    if (transition > 0 && realmShown >= 0) {
+    if (transition > 0 && realmShown >= 0 && timeOverride === null) {
       const p = PALETTES[realmShown];
       const k = Math.min(1, dt * 1.1);
       world.applyPalette(p, false, k);
@@ -375,7 +410,7 @@ export function createView({ canvas, onTap, onDoubleTap, settings }) {
     postMat.uniforms.uDissolve.value = dissolve;
     postMat.uniforms.uTime.value = clock;
 
-    if (tier.post && target) {
+    if (postOn() && target) {
       renderer.setRenderTarget(target);
       renderer.render(scene, camera);
       renderer.setRenderTarget(null);
@@ -384,7 +419,13 @@ export function createView({ canvas, onTap, onDoubleTap, settings }) {
       renderer.render(scene, camera);
     }
 
-    watchdog(dt, tierName);
+    // A capture is sixteen renders in one tick at a size nobody is playing at.
+    // Feeding those frame times to the watchdog would have it demote the tier
+    // on the strength of a screenshot.
+    if (!capturing) {
+      watchdog(dt, tierName);
+      fps += (1 / Math.max(dt, 1e-4) - fps) * 0.08;
+    }
   }
 
   /* ------------------------------------------------------------ helpers */
@@ -403,6 +444,90 @@ export function createView({ canvas, onTap, onDoubleTap, settings }) {
   /** Where the qi column stands — the anchor for floating +N labels. */
   const tapAnchor = new THREE.Vector3(0, 1.6, 0);
 
+  /* ------------------------------------------------------------- QA hooks */
+  //
+  // The debug panel is dev-only and loaded on demand, but the switches it
+  // throws belong to the renderer, because the renderer is the only thing that
+  // knows what a tier change or a scene rebuild has to do to them. Everything
+  // below is a no-op until something asks.
+
+  /** Luminance-only view of the finished frame. The primary QA instrument. */
+  function setGrayscale(on) {
+    postMat.uniforms.uGrayscale.value = on ? 1 : 0;
+    const need = !!on;
+    if (need !== forcePost) { forcePost = need; resize(); }
+  }
+
+  let wireframe = false;
+  function setWireframe(on) {
+    wireframe = !!on;
+    scene.traverse((o) => {
+      const mats = Array.isArray(o.material) ? o.material : (o.material ? [o.material] : []);
+      // Points and sprites have no wireframe, and asking for one on them
+      // silently does nothing — worse, it makes the toggle look broken.
+      for (const m of mats) if ('wireframe' in m) m.wireframe = wireframe;
+    });
+  }
+
+  /** Hold the sky at a point on the 0→1 dial. `null` hands it back to the game. */
+  function setTimeOfDay(t) {
+    timeOverride = t === null || t === undefined ? null : Math.max(0, Math.min(1, t));
+    paintNow(timeOverride === null
+      ? (realmShown >= 0 ? realmPalette() : PALETTES[0])
+      : paletteAt(timeOverride));
+  }
+
+  /** Hold the camera at a debug preset. `null` returns it to the game's framing. */
+  function setPose(f) {
+    poseOverride = f || null;
+    rig.reset();
+    if (poseOverride) rig.setPose(poseOverride, true);
+    else rig.setFraming(wantFraming, true);
+  }
+
+  function stats() {
+    const info = renderer.info.render;
+    const buf = renderer.getDrawingBufferSize(new THREE.Vector2());
+    return {
+      fps,
+      calls: info.calls,
+      triangles: info.triangles,
+      points: info.points,
+      lines: info.lines,
+      tier: tierName,
+      framing: poseOverride ? 'debug' : wantFraming,
+      width: cssWidth,
+      height: cssHeight,
+      aspect: cssWidth / cssHeight,
+      bufferWidth: Math.round(buf.x),
+      bufferHeight: Math.round(buf.y),
+      grayscale: postMat.uniforms.uGrayscale.value > 0,
+      wireframe,
+      timeOfDay: timeOverride,
+      realm: realmShown,
+      pose: rig.pose,
+    };
+  }
+
+  /**
+   * Draw one frame at an exact pixel size and reference aspect, leaving it on
+   * the canvas for the caller to read back. `dt = 0` so nothing animates: the
+   * same call twice gives the same image.
+   *
+   * The caller must call `resize()` when it is done to put the view back.
+   */
+  function captureFrame(w, h, aspect = CAMERA.referenceAspect) {
+    capturing = true;
+    renderer.setPixelRatio(1);
+    renderer.setSize(w, h, false);
+    camera.aspect = aspect;
+    camera.updateProjectionMatrix();
+    ensureTarget(w, h);
+    avatar.materials.moteMat.uniforms.uPixelRatio.value = 1;
+    render(0);
+    capturing = false;
+  }
+
   function dispose() {
     window.removeEventListener('resize', resize);
     rig.dispose();
@@ -418,7 +543,12 @@ export function createView({ canvas, onTap, onDoubleTap, settings }) {
     get scenery() { return scenery; },
     get effects() { return effects; },
     render, sync, resize, dispose, project, tapAnchor,
-    setFraming: (n, i) => rig.setFraming(n, i),
+    setFraming: (n, i) => {
+      wantFraming = n;
+      // A held debug preset outranks the game. Otherwise switching tabs or
+      // starting a tribulation would yank the camera out from under a capture.
+      if (!poseOverride) rig.setFraming(n, i);
+    },
     get framing() { return rig.framing; },
     setQuality, setReducedMotion,
     get quality() { return tierName; },
@@ -439,5 +569,8 @@ export function createView({ canvas, onTap, onDoubleTap, settings }) {
     RARITY_COLORS,
     anchors: { duel: DUEL_ANCHOR, forge: FORGE_ANCHOR },
     FRAMINGS,
+    CAMERA,
+    /** Everything the debug harness drives. Inert until it does. */
+    qa: { setGrayscale, setWireframe, setTimeOfDay, setPose, stats, captureFrame },
   };
 }

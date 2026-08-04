@@ -10,6 +10,8 @@
     "sim:active": "node tools/balance-sim.js --active",
     "balance": "node tools/balance-sim.js --check",
     "serve": "node tools/serve.js",
+    "sheet": "node tools/contact-sheet.js",
+    "sheet:gray": "node tools/contact-sheet.js --gray --out screenshots/contact-sheet-gray.png",
     "icons": "node tools/make-icons.js"
   },
   "license": "MIT"

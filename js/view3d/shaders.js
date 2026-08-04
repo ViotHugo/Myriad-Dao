@@ -5,8 +5,17 @@
 // one realm transition re-lights the whole world at once.
 
 import * as THREE from 'three';
+import { LUMA } from './palette.js';
 
 /* ------------------------------------------------------------ GLSL chunks */
+
+/**
+ * The luminance weights, as GLSL. Every desaturation in this file and the
+ * debug grayscale pass read from here, and `luminance()` in palette.js reads
+ * from the same constant — so the withering, the QA instrument and the value
+ * ladder the test suite asserts are all measuring with one ruler.
+ */
+export const LUMA3 = `vec3(${LUMA[0]}, ${LUMA[1]}, ${LUMA[2]})`;
 
 // Cheap value noise. Used for mist, paper fibre, water and ridge texture.
 export const NOISE = /* glsl */ `
@@ -171,7 +180,7 @@ export function makeInkMaterial(env, {
         col += uColor * uEmissive;
 
         col = applyFogCapped(col, vDepth, uFogCap, vWorldY);
-        col = mix(col, vec3(dot(col, vec3(0.299, 0.587, 0.114))), uDesat);
+        col = mix(col, vec3(dot(col, ${LUMA3})), uDesat);
         gl_FragColor = vec4(col, uOpacity);
       }
     `,
@@ -351,7 +360,7 @@ export function makeRockMaterial(env, {
         // The foot dissolves into the air, so the range stands *in* the cloud
         // rather than being sliced off by whatever plane happens to be there.
         col = mix(airAt(vWorldY), col, smoothstep(0.0, uFoot, vT));
-        col = mix(col, vec3(dot(col, vec3(0.299, 0.587, 0.114))), uDesat);
+        col = mix(col, vec3(dot(col, ${LUMA3})), uDesat);
         gl_FragColor = vec4(col, 1.0);
       }
     `,
@@ -473,7 +482,7 @@ export function makeSkyMaterial(env) {
           col = mix(col, storm, uStorm);
         }
 
-        col = mix(col, vec3(dot(col, vec3(0.299, 0.587, 0.114))), uDesat);
+        col = mix(col, vec3(dot(col, ${LUMA3})), uDesat);
         gl_FragColor = vec4(col, 1.0);
       }
     `,
@@ -534,7 +543,7 @@ export function makeRidgeMaterial(env, { color = '#39424f', fade = 0.5, grain = 
         float body = smoothstep(0.0, uFade, vUv.y);
         vec3 col = mix(uFogColor, uColor, clamp(body + wash * 0.35, 0.0, 1.0));
         float alpha = smoothstep(-0.30, 0.72, vUv.y + wash * 0.8);
-        col = mix(col, vec3(dot(col, vec3(0.299, 0.587, 0.114))), uDesat);
+        col = mix(col, vec3(dot(col, ${LUMA3})), uDesat);
         gl_FragColor = vec4(col, alpha);
       }
     `,
@@ -591,7 +600,7 @@ export function makeWaterMaterial(env) {
         col += uHorizon * glint * 0.45;
 
         col = applyFog(col, vDepth);
-        col = mix(col, vec3(dot(col, vec3(0.299, 0.587, 0.114))), uDesat);
+        col = mix(col, vec3(dot(col, ${LUMA3})), uDesat);
         // Dissolve at every edge: a rectangle of water in a valley gives the
         // whole illusion away, and the banks are meant to be lost in mist.
         float bank = smoothstep(0.0, 0.30, vUv.x) * smoothstep(1.0, 0.70, vUv.x)
@@ -640,7 +649,7 @@ export function makeMistMaterial(env, { color = '#8d99a8', opacity = 0.16, speed
         float edge = smoothstep(0.0, 0.30, vUv.y) * smoothstep(1.0, 0.55, vUv.y);
         float sides = smoothstep(0.0, 0.14, vUv.x) * smoothstep(1.0, 0.86, vUv.x);
         float a = n * edge * sides * uOpacity;
-        vec3 col = mix(uColor, vec3(dot(uColor, vec3(0.299, 0.587, 0.114))), uDesat);
+        vec3 col = mix(uColor, vec3(dot(uColor, ${LUMA3})), uDesat);
         gl_FragColor = vec4(col, a);
       }
     `,
@@ -750,7 +759,7 @@ export function makeCloudMaterial(env, {
         // A touch of the realm's own light on the crests, so the sea belongs to
         // the sky above it instead of reading as a white cut-out.
         col *= shade * (0.88 + 0.20 * uLightColor * crest);
-        col = mix(col, vec3(dot(col, vec3(0.299, 0.587, 0.114))), uDesat);
+        col = mix(col, vec3(dot(col, ${LUMA3})), uDesat);
         gl_FragColor = vec4(col, clamp(mass, 0.0, 1.0) * rim * uOpacity);
       }
     `,
@@ -800,7 +809,7 @@ export function makeFallMaterial(env, { color = '#cfe0ea', opacity = 0.42, fogCa
         // Barely fogged: falling water is the brightest thing in a grey valley,
         // and at this distance full aerial perspective erased it completely.
         vec3 col = applyFogCapped(uColor, vDepth, uFogCap);
-        col = mix(col, vec3(dot(col, vec3(0.299, 0.587, 0.114))), uDesat);
+        col = mix(col, vec3(dot(col, ${LUMA3})), uDesat);
         gl_FragColor = vec4(col, body * sides * head * foot * uOpacity);
       }
     `,
@@ -855,7 +864,7 @@ export function makeGlowMaterial(env, {
         f = mix(f, max(f, pow(facing, 0.6)), uCore);
         float pulse = 1.0 + uPulse * sin(uTime * 3.0) * 0.35;
         vec3 col = uColor * f * uStrength * pulse;
-        col = mix(col, vec3(dot(col, vec3(0.299, 0.587, 0.114))), uDesat * 0.7);
+        col = mix(col, vec3(dot(col, ${LUMA3})), uDesat * 0.7);
         gl_FragColor = vec4(col, clamp(f * uStrength * pulse, 0.0, 1.0));
       }
     `,
@@ -909,7 +918,7 @@ export function makeParticleMaterial(env, { color = '#35c98e', size = 7, additiv
         float core = smoothstep(0.42, 0.24, d);
         float halo = smoothstep(0.5, 0.0, d);
         float a = (core + halo * halo * 0.30) * uFade * vAlpha;
-        vec3 col = mix(uColor, vec3(dot(uColor, vec3(0.299, 0.587, 0.114))), uDesat);
+        vec3 col = mix(uColor, vec3(dot(uColor, ${LUMA3})), uDesat);
         gl_FragColor = vec4(col, clamp(a, 0.0, 1.0));
       }
     `,
@@ -1001,6 +1010,8 @@ export function makePostMaterial() {
       uFlash: { value: 0 },
       uFlashColor: { value: new THREE.Color('#ffffff') },
       uInk: { value: new THREE.Color('#0b0e12') },
+      // Debug only, and off in every shipped frame: see setGrayscale().
+      uGrayscale: { value: 0 },
     },
     vertexShader: /* glsl */ `
       varying vec2 vUv;
@@ -1013,7 +1024,7 @@ export function makePostMaterial() {
       uniform sampler2D tDiffuse;
       uniform vec2 uResolution;
       uniform vec3 uInk, uFlashColor;
-      uniform float uTime, uGrain, uVignette, uDissolve, uFlash, uDarken, uContrast;
+      uniform float uTime, uGrain, uVignette, uDissolve, uFlash, uDarken, uContrast, uGrayscale;
       ${NOISE}
       varying vec2 vUv;
       void main() {
@@ -1060,6 +1071,18 @@ export function makePostMaterial() {
         }
 
         col = mix(col, uFlashColor, clamp(uFlash, 0.0, 1.0));
+
+        // QA: the frame as pure value, nothing else. Dead last, after grain,
+        // vignette and flash, because the question it answers is "does the
+        // finished picture read", and the answer has to include everything the
+        // player will actually be looking at. Rec. 601 weights, shared with
+        // luminance() in palette.js so the eye and the test suite measure the
+        // same thing.
+        if (uGrayscale > 0.0) {
+          float luma = dot(col, vec3(${LUMA[0]}, ${LUMA[1]}, ${LUMA[2]}));
+          col = mix(col, vec3(luma), clamp(uGrayscale, 0.0, 1.0));
+        }
+
         gl_FragColor = vec4(col, 1.0);
       }
     `,

@@ -10,8 +10,9 @@ framework, no downloaded art. **~1035 KB total**, and installable as a PWA.
 
 ```bash
 npm run serve     # http://localhost:8123
-npm test          # 264 checks
+npm test          # 311 checks
 npm run balance   # assert the A18 pacing table
+npm run sheet     # 4 cameras × 4 skies -> screenshots/contact-sheet.png
 ```
 
 ## What's in it
@@ -45,18 +46,39 @@ Everything is synthesised or generated: the mountains from seeded ridged noise,
 the guqin from oscillators through a feedback-delay "valley echo", the icons
 from a 60-line PNG encoder over `zlib`.
 
+## The camera is locked
+
+A framing is not a preference — it is the coordinate system every other art
+decision is made in. Move the camera after the scene is built and every call
+that was made was made against a crop that no longer exists. So it is frozen, in
+one file, and asserted: a 45° lens on a portrait frame, the horizon at 45% of
+frame height, the cultivator's feet at 61% and her whole body 13.5% of the frame
+tall, with the top 12% and bottom 30% reserved for UI. `view3d/camera-config.js`
+holds all of it and `tests/run.js` fails if any of it drifts.
+
+And because "does this look better" is not a gate, the instruments came before
+the art. On localhost or with `?debug`: `G` renders the frame as pure luminance
+— an ink-wash landscape is a value ladder, and colour is very good at hiding one
+that has collapsed — plus wireframe, safe-zone overlay with live composition
+guides, a scrubber that walks the eight skies continuously, and four fixed
+cameras. `npm run sheet` shoots all four against four skies into one sixteen-cell
+contact sheet, deterministically, from a headless browser with no dependencies.
+
 ## Layout
 
 ```
-js/data.js            every tuned number
-js/engine.js          pure state + rules — no DOM, no WebGL, no Math.random
-js/ui.js              DOM/CSS HUD
-js/audio.js           synthesised WebAudio
-js/view3d/            Three.js: shaders, world, scenery, avatar, sect, effects, camera
-tools/balance-sim.js  plays the engine headlessly, checks pacing
-tools/make-icons.js   regenerates the PWA icons
-tests/run.js          264 checks
-docs/DESIGN.md        art direction, performance budget, quality tiers, balance
+js/data.js               every tuned number
+js/engine.js             pure state + rules — no DOM, no WebGL, no Math.random
+js/ui.js                 DOM/CSS HUD
+js/audio.js              synthesised WebAudio
+js/view3d/               Three.js: shaders, world, scenery, avatar, sect, effects
+js/view3d/camera-config.js   the locked camera — one object, no scattered literals
+js/view3d/debug.js       the QA harness. Dev-only, dynamically imported, never shipped
+tools/contact-sheet.js   drives a headless browser to shoot the 16-frame sheet
+tools/balance-sim.js     plays the engine headlessly, checks pacing
+tools/make-icons.js      regenerates the PWA icons
+tests/run.js             311 checks
+docs/DESIGN.md           art direction, performance budget, quality tiers, balance
 ```
 
 The engine runs in Node with no renderer present. If `npm run balance` stops

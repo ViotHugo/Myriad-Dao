@@ -332,24 +332,31 @@ The numbers that matter, all as fractions of frame height:
 
 | | v |
 |---|---|
-| HUD top bar ends | 0.12 |
+| Status bar ends | 0.12 |
 | Karst summits | 0.126 – 0.20 |
-| **Horizon of the ground plane** | **0.198** |
 | Cloud band tops | 0.21 / 0.25 / 0.30 |
 | Karst feet | 0.215 – 0.42 |
 | Ridge crests (five layers) | 0.33 – 0.44 |
+| **Horizon of the ground plane** | **0.45** |
+| The cultivator's head | 0.475 |
+| **The cultivator's feet** | **0.61** |
+| UI begins | 0.70 |
 | Valley mist | 0.38 – 0.76 |
 
-The horizon is the hinge. A summit below v = 0.198 is a hill; above it, the same
+The horizon is the hinge. A summit below it is a hill; above it, the same
 silhouette is a mountain against sky. The first version of the range put its
-summits at 0.17–0.38 — almost entirely below the horizon — and no amount of
-recolouring made it read as anything but low hills.
+summits almost entirely below the horizon, and no amount of recolouring made it
+read as anything but low hills.
 
-The ridges moved to accommodate it. They used to crest above the top of the
-frame and, being opaque strips, buried everything behind them; the range was
-being drawn correctly and painted over. They are now valley walls beneath the
-skyline, which is also the truer reading of the scene — the cultivator is on a
-high shelf looking out and *down*.
+> **These placements predate the camera lock.** The horizon used to sit at
+> v = 0.198 — a camera tilted 13° down from a high shelf — and everything in the
+> table above the horizon row was authored under it. Stage 0 froze the framing at
+> a near-level 45° lens with the horizon at 0.45, and the frame-space placements
+> followed the camera automatically because that is what frame-space placement is
+> for. What did *not* follow is the intent: crests authored as valley walls
+> *below* a high horizon now read as distant ranges *above* a low one. Re-seating
+> them is a later stage's job, and it is a job to be done against this camera,
+> not against the one they were drawn for.
 
 Both stacks interleave by render order. The ridges write no depth, so they are a
 painter's stack at -6/-9/-12/-15/-18, gapped deliberately; each spire rank and
@@ -377,13 +384,47 @@ dials, so it is testable without a browser:
 
 ### Camera
 
-The composition is authored — there is no free-fly. Named framings
-(`world`, `close`, `sect`, `trib`, `forge`, `duel`, `rebirth`) each carry a
-target, distance, yaw, pitch, fov and drift weight, and the rig eases between
-them. The player may nudge inside a limited arc (±0.62 rad yaw, clamped pitch,
-0.62–1.45× zoom).
+**Everything is in `view3d/camera-config.js`, and nothing is anywhere else.**
+That is a rule, not a description: the lens, the near and far planes, the
+reference aspect, the safe zones, the composition contract, every named framing
+and the four QA presets are one exported object, and the test suite greps
+`view3d/index.js` to prove the `PerspectiveCamera` constructor takes its
+arguments from it. A framing is not a preference — it is the coordinate system
+every other art decision is made in, so it gets one home and one owner.
 
-Two things worth knowing:
+The contract, and the reason for each line:
+
+| | | why |
+|---|---|---|
+| fov | **45** | portrait, 414×896 reference |
+| horizon | **v = 0.45** | above centre. A centred horizon splits the frame in two and neither half wins |
+| character anchor | **v = 0.61**, u = 0.44 | lower third, off the vertical centre line |
+| character height | **13.5%** of frame | small. The landscape is the subject; she is what gives it scale |
+| status bar | top **12%** | reserved |
+| UI | bottom **30%** | reserved |
+
+The hero framing is *solved* from that table rather than eyeballed. Pitch comes
+from the horizon target — the rig's position formula carries a `+0.06·dist`
+vertical bias, so the pitch that lands the horizon at 0.45 is slightly negative,
+not zero. Distance comes from the figure's height on screen. Target comes from
+where her feet have to land, and sits at her depth so the player's nudge arc
+orbits the figure. Change one and all four have to be re-derived together;
+`tests/run.js` fails if they drift.
+
+The horizon here is the true horizon — the vanishing line of the ground plane,
+which is a property of the lens and the tilt and nothing else. That matters
+because it makes the contract portable: `horizonV()` takes no aspect argument,
+so "45% down the frame" means the same thing on a phone and on a tablet. The
+vertical half of the contract is aspect-independent throughout, which is why it
+can be stated as a number at all.
+
+The player may still nudge inside a limited arc (±0.62 rad yaw, clamped pitch,
+0.62–1.45× zoom), and the game still moves the camera between named framings
+(`world`, `close`, `sect`, `trib`, `forge`, `duel`, `rebirth`) with the rig
+easing between them. Every framing writes its fov as `FOV ± n` so there is one
+lens to retune.
+
+Two more things worth knowing:
 
 - **A tap always cultivates.** Double-tap-to-reframe rides on top and only fires
   when there is a nudged camera to undo. An earlier build let double-tap
@@ -394,6 +435,58 @@ Two things worth knowing:
   lift it into the strip the player can still see, and approaches from the side
   so the foreground cliff does not occlude it. "The camera moves to the sect"
   has to actually be true.
+
+### The debug harness
+
+Dev-only, `js/view3d/debug.js`, imported dynamically from `main.js` and only
+when the page is on localhost or carries `?debug` — a shipped build never
+fetches the file, and the service worker shell deliberately does not list it.
+The renderer exposes the switches (`view.qa.*`) because the renderer is the only
+thing that knows what a tier change or a scene rebuild has to do to them; the
+panel only throws them.
+
+| key | |
+|---|---|
+| `G` | grayscale — the finished frame as pure value |
+| `W` | wireframe |
+| `S` | safe-zone overlay, plus live horizon / anchor / figure guides |
+| `T` | time-of-day scrubber, 0→1 across the eight skies (`←`/`→` to step) |
+| `C` | cycle the four fixed cameras: hero, wide, close, profile |
+| `P` | shoot a contact sheet |
+| `` ` `` | hide the panel |
+
+The panel reads out FPS, draw calls and triangles, and — the part that matters —
+the live composition measured against the contract, turning red the moment the
+horizon, the anchor or the figure's height leaves tolerance.
+
+**Grayscale is the primary instrument.** An ink-wash landscape is a value ladder
+before it is anything else, and colour is very good at hiding a ladder that has
+collapsed: two things that are obviously different in colour can be the same
+grey, and a range that is the same grey as the sky behind it has stopped being a
+range. The pass runs dead last in the post shader, after grain, vignette and
+flash, because the question it answers is "does the finished picture read". It
+uses `LUMA` from `palette.js` — the same weights `luminance()` uses, which is
+the same ruler the value-ladder assertions in the test suite measure with. Two
+rulers would be worse than none. On the `low` tier, which ships with no post
+pass at all, turning grayscale on forces the render target into existence rather
+than silently doing nothing.
+
+### The contact sheet
+
+Four cameras × four skies = sixteen frames in one image. `npm run sheet` starts
+the static server, drives a headless Chromium at it over the DevTools protocol
+with no dependencies beyond Node's own `WebSocket`, and writes
+`screenshots/contact-sheet.png`; `npm run sheet:gray` shoots the value-ladder
+version. `--guides` burns the safe zones into every cell, `--cells` writes the
+sixteen frames out individually.
+
+Captures are deterministic on purpose. The presets carry `drift: 0` so the
+camera's idle breathing is switched off, `setPose` rewinds the drift phase,
+frames render at `dt = 0` so nothing animates between them, and the frame-time
+watchdog is muted so sixteen renders in one tick cannot demote the quality tier
+on the strength of a screenshot. Two runs of the same build produce the same
+picture, which is the whole point: a difference between two sheets is a
+difference between two builds.
 
 ### Cinematic mode
 

@@ -100,11 +100,21 @@ export function createWorld(env, tier) {
   // the world coordinate is an implementation detail. placeAtDepth turns one
   // into the other.
   //
-  // These crests all sit *below* the horizon (v = 0.198) on purpose. The
-  // cultivator is on a high shelf looking out and down; the ranges below are
-  // valley walls, and the skyline above them belongs to the karst spires in
-  // scenery.js. Raising these back over the horizon buries the whole range —
-  // the ridge strips are opaque, so anything behind them is simply gone.
+  // These crests were authored under the pre-lock camera, whose horizon sat at
+  // v = 0.198: the cultivator looked out and *down* off a high shelf, so every
+  // crest below is a valley wall beneath the skyline, and the skyline itself
+  // belongs to the karst spires in scenery.js.
+  //
+  // Stage 0 froze the framing at a near-level lens with the horizon at
+  // horizonV(FRAMINGS.world) = 0.45, and placeAtDepth moved these strips to
+  // match without anyone touching a number here — which is exactly what
+  // frame-space placement is for, and also exactly why it needs saying out
+  // loud: they still land where they were told to land, but "below the horizon"
+  // is no longer what that means. They read as distant ranges now, not valley
+  // walls. Re-seating them is a later stage's job, against this camera.
+  //
+  // The old warning stands whatever the horizon is: the ridge strips are
+  // opaque, so anything placed behind one is simply gone.
   const LAYERS = [
     { z: -58,  crestV: 0.440, segments: 128, roughness: 1.5 },
     { z: -96,  crestV: 0.404, segments: 112, roughness: 1.2 },

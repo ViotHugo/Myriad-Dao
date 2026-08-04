@@ -179,10 +179,63 @@ export const PALETTES = [
   },
 ];
 
+/**
+ * The one set of luminance weights in the codebase — Rec. 601.
+ *
+ * The value ladder is checked in the test suite with these numbers and the
+ * debug grayscale pass converts the frame with these same numbers, so what QA
+ * looks at through the `G` key and what the suite asserts are the same ruler.
+ * Two rulers is worse than none: the picture would pass one and fail the other
+ * and nobody could say which was lying.
+ */
+export const LUMA = [0.299, 0.587, 0.114];
+
 /** Relative luminance of a '#rrggbb' string, 0..255. The value ladder's ruler. */
 export function luminance(hex) {
   const n = parseInt(hex.slice(1), 16);
-  return 0.299 * ((n >> 16) & 255) + 0.587 * ((n >> 8) & 255) + 0.114 * (n & 255);
+  return LUMA[0] * ((n >> 16) & 255) + LUMA[1] * ((n >> 8) & 255) + LUMA[2] * (n & 255);
+}
+
+/* ------------------------------------------------------- the day, as a dial */
+
+const hex2 = (n) => Math.round(Math.max(0, Math.min(255, n))).toString(16).padStart(2, '0');
+
+/** Mix two '#rrggbb' strings. Linear in the same space the palettes are authored in. */
+export function mixHex(a, b, t) {
+  const x = parseInt(a.slice(1), 16);
+  const y = parseInt(b.slice(1), 16);
+  const ch = (s) => ((x >> s) & 255) + (((y >> s) & 255) - ((x >> s) & 255)) * t;
+  return `#${hex2(ch(16))}${hex2(ch(8))}${hex2(ch(0))}`;
+}
+
+/**
+ * Blend two palettes structurally: colours mix, scalars lerp, nested objects
+ * and arrays recurse. The result is palette-shaped, so anything that eats a
+ * palette eats this without knowing it was made up.
+ *
+ * Luminance is linear in RGB and so is this, which means the value ladder any
+ * two neighbouring skies satisfy is satisfied everywhere between them too.
+ * That is asserted rather than assumed — see tests/run.js.
+ */
+export function blendPalettes(a, b, t) {
+  if (typeof a === 'string') return a.startsWith('#') ? mixHex(a, b, t) : (t < 0.5 ? a : b);
+  if (typeof a === 'number') return a + (b - a) * t;
+  if (Array.isArray(a)) return a.map((v, i) => blendPalettes(v, b[i], t));
+  const out = {};
+  for (const k of Object.keys(a)) out[k] = blendPalettes(a[k], b[k], t);
+  return out;
+}
+
+/**
+ * The sky at time `t`, 0 → 1 across the eight realms. The debug scrubber's
+ * whole job: one continuous dial over what the game otherwise only ever shows
+ * you eight discrete steps of.
+ */
+export function paletteAt(t) {
+  const x = Math.max(0, Math.min(1, t)) * (PALETTES.length - 1);
+  const i = Math.min(PALETTES.length - 2, Math.floor(x));
+  const k = x - i;
+  return k === 0 ? PALETTES[i] : blendPalettes(PALETTES[i], PALETTES[i + 1], k);
 }
 
 /** Hair and beard change across four brackets of age/lifespan, never raw age. */
