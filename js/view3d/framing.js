@@ -1,36 +1,30 @@
-// The authored camera framings, and the maths to compose against them.
+// The maths to compose against the locked camera.
 //
 // The scenery is a painting, not a simulation: a peak matters because of where
 // its summit lands in the frame, not where it stands in world space. Placing by
 // world coordinate means re-guessing every number the moment the camera is
 // retuned — and guessing badly, because the world framing looks down a diagonal,
-// so the visible slice of world x at z = -140 is [-147, -65], not something
-// centred on zero. Half a range placed "around x = 0" is simply off-screen.
+// so the visible slice of world x at z = -140 is not something centred on zero.
+// Half a range placed "around x = 0" is simply off-screen.
 //
 // So this module inverts the projection: name a depth and a point in the frame,
 // get back the world position that lands there. It is deliberately free of
 // Three.js — the same arithmetic runs in the test suite.
+//
+// The camera itself lives in camera-config.js, alone, so that "the framing" is
+// a thing you can read in one sitting. This file only does arithmetic to it.
+
+import { CAMERA } from './camera-config.js';
 
 /** Named framings. Opening the Sect tab moves the camera; it does not hide the world. */
-export const FRAMINGS = {
-  world:  { target: [0.8, 2.6, -1.0], dist: 12.5, yaw: 0.62, pitch: 0.17, fov: 42, drift: 1 },
-  close:  { target: [0.0, 1.3, 0.0],  dist: 5.6,  yaw: 0.45, pitch: 0.10, fov: 40, drift: 0.6 },
-  // The sheet covers the lower ~68% of a phone screen, so the sect framing aims
-  // well below the valley: that lifts the sect into the strip the player can
-  // actually still see. Otherwise "the camera moves to the sect" is a lie.
-  sect:   { target: [2.0, -26.0, -52.0], dist: 46, yaw: 0.95, pitch: 0.30, fov: 44, drift: 0.7 },
-  trib:   { target: [0.0, 2.2, 0.0],  dist: 14.0, yaw: 0.30, pitch: 0.02, fov: 50, drift: 0.3 },
-  forge:  { target: [5.2, 1.1, 3.4],  dist: 4.6,  yaw: 0.90, pitch: 0.14, fov: 40, drift: 0.4 },
-  duel:   { target: [26, -2.9, -14],  dist: 14.5, yaw: 0.16, pitch: 0.05, fov: 44, drift: 0.3 },
-  rebirth: { target: [0.0, 3.0, 0.0], dist: 20.0, yaw: 0.62, pitch: -0.02, fov: 55, drift: 0.2 },
-};
+export const FRAMINGS = CAMERA.framings;
 
 /**
  * Portrait phone, the frame the composition is authored for. Wider screens see
  * more to the sides, which is why placement overscans rather than filling
  * exactly to the edges.
  */
-export const REFERENCE_ASPECT = 414 / 896;
+export const REFERENCE_ASPECT = CAMERA.referenceAspect;
 
 /**
  * The camera basis for a framing, matching what the rig builds each update:
@@ -104,6 +98,76 @@ export function unitsPerFrame(worldZ, opts = {}) {
   const bottom = placeAtDepth(0.5, 1, worldZ, opts);
   if (!top || !bottom) return 1;
   return Math.abs(top[1] - bottom[1]);
+}
+
+/**
+ * Where the horizon lands, as a fraction down the frame.
+ *
+ * Not the skyline — the true horizon, the vanishing line of the ground plane,
+ * which is a property of the lens and the tilt and nothing else. `lookAt` with
+ * world up leaves no roll, so every horizontal direction at infinity projects
+ * to the same height and this one number is the whole line. It is also
+ * independent of aspect, which is why the contract can name it and mean it on
+ * any screen.
+ */
+export function horizonV(framing = FRAMINGS.world) {
+  const b = cameraBasis(framing);
+  // Straight ahead, flattened onto the ground plane: a direction, not a point,
+  // so this is where that direction goes when it is infinitely far away.
+  const d = norm([-b.z[0], 0, -b.z[2]]);
+  const tanH = Math.tan((framing.fov * Math.PI) / 360);
+  const ndcY = dot(d, b.y) / -dot(d, b.z) / tanH;
+  return 0.5 - ndcY * 0.5;
+}
+
+/** How much of the frame's height a vertical world segment covers. */
+export function spanV(from, to, opts = {}) {
+  const a = frameOf(from, opts);
+  const b = frameOf(to, opts);
+  if (a.behind || b.behind) return NaN;
+  return Math.abs(a.v - b.v);
+}
+
+/**
+ * The composition contract, measured rather than asserted: what a framing
+ * actually does to the horizon and to the figure standing at the anchor.
+ *
+ * This is what the debug panel reads out live and what the test suite checks,
+ * so the numbers on screen during QA and the numbers the gate passes on are the
+ * same numbers.
+ */
+export function composition(framing = FRAMINGS.world, { aspect = REFERENCE_ASPECT } = {}) {
+  const c = CAMERA.composition;
+  const foot = c.characterAnchor;
+  const head = [foot[0], foot[1] + c.characterHeight, foot[2]];
+  const base = frameOf(foot, { framing, aspect });
+  const crown = frameOf(head, { framing, aspect });
+  return {
+    horizonV: horizonV(framing),
+    anchorU: base.u,
+    anchorV: base.v,
+    characterTopV: crown.v,
+    characterHeightV: base.v - crown.v,
+  };
+}
+
+/**
+ * Every combination the contact sheet captures: four cameras across four
+ * skies, in row-major order. Pure, so the count and the labels can be asserted
+ * without a renderer anywhere near them.
+ */
+export function contactSheetPlan() {
+  const cells = [];
+  for (const preset of CAMERA.debugPresets) {
+    for (const time of CAMERA.timesOfDay) {
+      cells.push({ preset, time, label: `${preset.label} · ${time.label}` });
+    }
+  }
+  return {
+    columns: CAMERA.timesOfDay.length,
+    rows: CAMERA.debugPresets.length,
+    cells,
+  };
 }
 
 /* ------------------------------------------------------------ tiny vectors */

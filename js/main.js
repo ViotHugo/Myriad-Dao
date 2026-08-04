@@ -7,6 +7,7 @@
 import * as E from './engine.js';
 import * as D from './data.js';
 import { createView } from './view3d/index.js';
+import { debugEnabled } from './view3d/dev-flag.js';
 import { createUI } from './ui.js';
 import { createAudio } from './audio.js';
 import { fmt } from './format.js';
@@ -51,11 +52,18 @@ if (prefersReduced && saved === null) game.state.settings.reducedMotion = true;
 
 /* ------------------------------------------------------------------ view */
 
+// The debug harness is dev-only. The module itself is imported dynamically
+// further down, so a shipped build never fetches it — but the renderer has to
+// know before it makes its context, because reading the canvas back for a
+// contact sheet needs preserveDrawingBuffer.
+const DEBUG = debugEnabled();
+
 let view;
 try {
   view = createView({
     canvas: CANVAS,
     settings: game.state.settings,
+    debug: DEBUG,
     onTap: () => { audio.boot(); audio.resume(); ui.handleWorldTap(); },
     onDoubleTap: () => view.setFraming(ui.tab === 'sect' ? 'sect' : 'world'),
   });
@@ -225,3 +233,11 @@ if ('serviceWorker' in navigator) {
 
 // Handy for debugging in the field; harmless in production.
 window.myriad = { game, view, ui, audio, E, D };
+
+/* ------------------------------------------------------------- debug rig */
+
+if (DEBUG) {
+  import('./view3d/debug.js')
+    .then(({ createDebugPanel }) => createDebugPanel({ view }))
+    .catch((err) => console.warn('[debug] harness unavailable', err));
+}

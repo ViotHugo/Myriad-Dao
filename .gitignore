@@ -1,3 +1,7 @@
 node_modules/
 .DS_Store
 *.log
+
+# Contact sheets and the throwaway browser profile the capture tool uses.
+# These are gate evidence, not source — regenerate with `npm run sheet`.
+screenshots/
