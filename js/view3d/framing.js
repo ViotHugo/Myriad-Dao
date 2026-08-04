@@ -120,6 +120,33 @@ export function horizonV(framing = FRAMINGS.world) {
   return 0.5 - ndcY * 0.5;
 }
 
+/**
+ * How far a light stands off the camera's own bearing, in degrees of azimuth.
+ *
+ * The one number that decides whether a sun can be seen to be a sun. At zero
+ * the light is directly behind the viewer's head: nothing the camera sees is
+ * turned away from it, no plane in the picture separates from its neighbour,
+ * and every shadow falls exactly behind the thing that cast it. At ninety it
+ * rakes across the frame, every solid gets a lit side and a dark side, and a
+ * figure lays her shadow out where she can be seen to be sitting on something.
+ *
+ * `dir` points *at* the light, matching palette.js. Elevation is deliberately
+ * ignored — this measures bearing only, so a low sun and a high one at the
+ * same compass point score the same and the elevation stays each realm's own
+ * business. The result is 0..180.
+ */
+export function sunOffsetDeg(dir, framing = FRAMINGS.world) {
+  const b = cameraBasis(framing);
+  // Both measured as bearings *outward from the subject*: toward the eye, and
+  // toward the light. Zero then means the light is at the lens, which is the
+  // thing being guarded against. (`b.z` already points from target to camera.)
+  const view = Math.atan2(b.z[0], b.z[2]);
+  const sun = Math.atan2(dir[0], dir[2]);
+  let d = Math.abs(((sun - view + Math.PI) % (2 * Math.PI)) - Math.PI);
+  if (d > Math.PI) d = 2 * Math.PI - d;
+  return (d * 180) / Math.PI;
+}
+
 /** How much of the frame's height a vertical world segment covers. */
 export function spanV(from, to, opts = {}) {
   const a = frameOf(from, opts);

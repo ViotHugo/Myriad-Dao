@@ -5,7 +5,7 @@
 // It never reads engine state directly and never decides any rule.
 
 import * as THREE from 'three';
-import { createEnv, makePostMaterial } from './shaders.js';
+import { createEnv, makePostMaterial, displayColor } from './shaders.js';
 import { PALETTES, paletteAt } from './palette.js';
 import { CAMERA } from './camera-config.js';
 import { TIERS, resolveTier, createWatchdog } from './quality.js';
@@ -15,18 +15,27 @@ import { createSect } from './sect.js';
 import { createScenery } from './scenery.js';
 import { createEffects, DUEL_ANCHOR, FORGE_ANCHOR } from './effects.js';
 import { createCameraRig, FRAMINGS } from './camera.js';
+import { createLighting } from './lighting.js';
+import { createPost } from './post.js';
 
 const RARITY_COLORS = {
   mortal: '#8e9099', spirit: '#35c98e', earth: '#4aa3e0', heaven: '#b07ae8', immortal: '#e8b34b',
 };
 
-// This renderer is entirely authored: hand-written toon ramps, no PBR, no
-// physical light units. Three's colour management would convert every palette
-// hex into linear working space, and a custom ShaderMaterial gets no automatic
-// linear->sRGB conversion on the way out — so the whole world would render at
-// roughly 40% of the brightness it was painted at. Turning it off means the
-// colours in palette.js are exactly the colours on screen.
-THREE.ColorManagement.enabled = false;
+// The shading is still entirely authored — hand-written toon ramps, no PBR, no
+// physical units — but it is authored in *linear light* now, and that needs
+// colour management on. Every palette hex is converted from sRGB into the
+// linear working space on the way in, the whole scene is lit and fogged and
+// bloomed there, and the last pass in the composer tone maps it and encodes it
+// back to sRGB for the screen.
+//
+// This used to be off, with the reasoning that a custom ShaderMaterial gets no
+// automatic conversion on the way out and the world would therefore render at
+// about 40% of the brightness it was painted at. That was true and is now
+// handled, once, in makePostMaterial — and it has to be, because a tone curve
+// applied to values that are already gamma-encoded has nothing left to roll
+// off. Half of "the picture looks flat" was exactly that.
+THREE.ColorManagement.enabled = true;
 
 export function createView({ canvas, onTap, onDoubleTap, settings, debug = false }) {
   /* ------------------------------------------------------------- setup */
@@ -47,7 +56,17 @@ export function createView({ canvas, onTap, onDoubleTap, settings, debug = false
     // Everybody else pays nothing for it.
     preserveDrawingBuffer: !!debug,
   });
-  renderer.outputColorSpace = THREE.LinearSRGBColorSpace; // pass-through; see above
+  // Linear in, sRGB out, with the ACES shoulder in between. The curve is
+  // written by hand in makePostMaterial because every material in this
+  // renderer writes gl_FragColor itself and so gets none of three's automatic
+  // chunks — but the setting is the authority all the same: the post pass
+  // reads `toneMappingExposure` off the renderer every frame, which is the one
+  // dial the time-of-day grade will turn.
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 1.0;
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   renderer.setClearColor(0x0b0e12, 1);
   // Manual reset so renderer.info counts the whole frame (scene + post pass),
   // not just whatever was drawn last. The draw-call budget depends on it.
@@ -59,8 +78,13 @@ export function createView({ canvas, onTap, onDoubleTap, settings, debug = false
   const camera = new THREE.PerspectiveCamera(CAMERA.fov, 1, CAMERA.near, CAMERA.far);
 
   const env = createEnv();
+  // Three lights, one shadow caster, no ambient. Built before the world and
+  // never rebuilt: it holds no geometry and nothing in it is a tier setting.
+  const lighting = createLighting(env);
+  scene.add(lighting.group);
+
   // Rebuildable: a tier change swaps these out wholesale (see setQuality).
-  let world = createWorld(env, tier);
+  let world = createWorld(env, tier, lighting);
   let avatar = createAvatar(env, tier);
   let sect = createSect(env, tier);
   let scenery = createScenery(env, tier);
@@ -69,41 +93,8 @@ export function createView({ canvas, onTap, onDoubleTap, settings, debug = false
 
   /* --------------------------------------------------------- post stack */
 
-  // One pass: paper, vignette, dissolve, flash. Anything more is a tax.
-  const postScene = new THREE.Scene();
-  const postCamera = new THREE.Camera();
   const postMat = makePostMaterial();
-  postScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), postMat));
-  let target = null;
-
-  // The grayscale QA pass lives in the post shader, so on a tier that ships
-  // without post there would be nothing to put it in. Turning it on forces the
-  // target into existence for as long as the debug toggle is held.
-  let forcePost = false;
-  const postOn = () => tier.post || forcePost;
-
-  function ensureTarget(w, h) {
-    if (!postOn()) { if (target) { target.dispose(); target = null; } return; }
-    // The scene goes into this target, so this is where antialiasing has to
-    // happen. The `antialias` flag on the renderer applies to the canvas'
-    // default framebuffer, which the post path never draws into — every tier
-    // with post enabled was therefore fully aliased no matter what it asked
-    // for. Multisampling the target is the fix, and it is why the tiers carry
-    // an `msaa` count now.
-    const samples = tier.msaa || 0;
-    if (target && target.width === w && target.height === h && target.samples === samples) return;
-    target?.dispose();
-    target = new THREE.WebGLRenderTarget(w, h, {
-      minFilter: THREE.LinearFilter,
-      magFilter: THREE.LinearFilter,
-      format: THREE.RGBAFormat,
-      type: THREE.UnsignedByteType,
-      depthBuffer: true,
-      samples,
-    });
-    postMat.uniforms.tDiffuse.value = target.texture;
-    postMat.uniforms.uResolution.value.set(w, h);
-  }
+  const post = createPost({ renderer, scene, camera, postMat, tier });
 
   /* ------------------------------------------------------------- resize */
 
@@ -112,13 +103,15 @@ export function createView({ canvas, onTap, onDoubleTap, settings, debug = false
     const parent = canvas.parentElement || document.body;
     cssWidth = Math.max(1, parent.clientWidth || window.innerWidth);
     cssHeight = Math.max(1, parent.clientHeight || window.innerHeight);
-    const dpr = Math.min(window.devicePixelRatio || 1, tier.pixelRatio) * tier.renderScale;
+    // Never above 2, whatever the tier or the panel asks for: past that the
+    // extra pixels cost real frames and buy nothing anybody can see.
+    const cap = Math.min(window.devicePixelRatio || 1, 2);
+    const dpr = Math.min(cap, tier.pixelRatio) * tier.renderScale;
     renderer.setPixelRatio(dpr);
     renderer.setSize(cssWidth, cssHeight, false);
     camera.aspect = cssWidth / cssHeight;
     camera.updateProjectionMatrix();
-    const buf = renderer.getDrawingBufferSize(new THREE.Vector2());
-    ensureTarget(Math.max(1, Math.floor(buf.x)), Math.max(1, Math.floor(buf.y)));
+    post.setSize(cssWidth, cssHeight, dpr);
     avatar.materials.moteMat.uniforms.uPixelRatio.value = dpr;
   }
   window.addEventListener('resize', resize);
@@ -261,7 +254,10 @@ export function createView({ canvas, onTap, onDoubleTap, settings, debug = false
   let flash = 0;
   let flashDecay = 1;
   function postFlash(color, amount = 0.6) {
-    postMat.uniforms.uFlashColor.value.set(color);
+    // displayColor, not .set(): the flash is mixed in after the tone curve and
+    // the sRGB encode, so it is a pixel already and must not be converted into
+    // linear light on the way in.
+    postMat.uniforms.uFlashColor.value.copy(displayColor(color));
     flash = amount;
     flashDecay = 1.8;
   }
@@ -303,7 +299,7 @@ export function createView({ canvas, onTap, onDoubleTap, settings, debug = false
 
   function rebuildScene() {
     for (const g of [world.group, avatar.group, sect.group, scenery.group, effects.group]) disposeGroup(g);
-    world = createWorld(env, tier);
+    world = createWorld(env, tier, lighting);
     avatar = createAvatar(env, tier);
     sect = createSect(env, tier);
     scenery = createScenery(env, tier);
@@ -332,6 +328,7 @@ export function createView({ canvas, onTap, onDoubleTap, settings, debug = false
     const geometryChanged = GEOMETRY_KEYS.some((k) => prev[k] !== tier[k]);
     if (geometryChanged && minigame.kind === null) rebuildScene();
     else if (geometryChanged) pendingRebuild = true;
+    post.setTier(tier);
     resize();
   }
 
@@ -410,14 +407,7 @@ export function createView({ canvas, onTap, onDoubleTap, settings, debug = false
     postMat.uniforms.uDissolve.value = dissolve;
     postMat.uniforms.uTime.value = clock;
 
-    if (postOn() && target) {
-      renderer.setRenderTarget(target);
-      renderer.render(scene, camera);
-      renderer.setRenderTarget(null);
-      renderer.render(postScene, postCamera);
-    } else {
-      renderer.render(scene, camera);
-    }
+    post.render(dt);
 
     // A capture is sixteen renders in one tick at a size nobody is playing at.
     // Feeding those frame times to the watchdog would have it demote the tier
@@ -451,11 +441,16 @@ export function createView({ canvas, onTap, onDoubleTap, settings, debug = false
   // knows what a tier change or a scene rebuild has to do to them. Everything
   // below is a no-op until something asks.
 
-  /** Luminance-only view of the finished frame. The primary QA instrument. */
+  /**
+   * Luminance-only view of the finished frame. The primary QA instrument.
+   *
+   * It lives in the last pass of the composer, and that pass now runs on every
+   * tier — the frame has to be tone mapped and encoded somewhere — so unlike
+   * the old single-pass arrangement there is nothing to force into existence
+   * first. The instrument works the same on `low` as on `high`.
+   */
   function setGrayscale(on) {
     postMat.uniforms.uGrayscale.value = on ? 1 : 0;
-    const need = !!on;
-    if (need !== forcePost) { forcePost = need; resize(); }
   }
 
   let wireframe = false;
@@ -522,7 +517,7 @@ export function createView({ canvas, onTap, onDoubleTap, settings, debug = false
     renderer.setSize(w, h, false);
     camera.aspect = aspect;
     camera.updateProjectionMatrix();
-    ensureTarget(w, h);
+    post.setSize(w, h, 1);
     avatar.materials.moteMat.uniforms.uPixelRatio.value = 1;
     render(0);
     capturing = false;
@@ -531,8 +526,8 @@ export function createView({ canvas, onTap, onDoubleTap, settings, debug = false
   function dispose() {
     window.removeEventListener('resize', resize);
     rig.dispose();
+    post.dispose();
     renderer.dispose();
-    target?.dispose();
   }
 
   return {

@@ -22,7 +22,7 @@ import { PALETTES, luminance, LUMA, mixHex, paletteAt } from '../js/view3d/palet
 import { CAMERA } from '../js/view3d/camera-config.js';
 import {
   FRAMINGS, REFERENCE_ASPECT, cameraBasis, frameOf, placeAtDepth, unitsPerFrame,
-  horizonV, composition, contactSheetPlan,
+  horizonV, composition, contactSheetPlan, sunOffsetDeg,
 } from '../js/view3d/framing.js';
 import { debugEnabled } from '../js/view3d/dev-flag.js';
 import { mulberry32, seededRandom } from '../js/rng.js';
@@ -1224,13 +1224,13 @@ section('Architecture — purity and determinism');
     ([, t]) => t.pixelRatio * t.renderScale >= 1,
   ));
 
-  check('every tier that post-processes asks for multisampling', Object.entries(TIERS).every(
-    // `antialias` is a flag on the canvas' default framebuffer, and the post
-    // path renders into a WebGLRenderTarget instead — so it applies to a buffer
-    // that is never drawn to. Tiers with post need `msaa`, which multisamples
-    // the target the scene really goes into, or they get no antialiasing at all
-    // however loudly they ask for it.
-    ([, t]) => !t.post || t.msaa > 0,
+  check('every tier multisamples the target the scene goes into', Object.entries(TIERS).every(
+    // `antialias` is a flag on the canvas' default framebuffer, and the scene
+    // is drawn into a WebGLRenderTarget instead — so it applies to a buffer
+    // that is never drawn to. `msaa` is the one that counts, and since every
+    // tier now composites, every tier needs it or it gets no antialiasing at
+    // all however loudly it asks for it.
+    ([, t]) => t.msaa > 0,
   ));
 
   check('every quality setting resolves to a real tier', (() => {
@@ -1434,6 +1434,179 @@ section('Palette — the ink-wash value ladder');
   check('the air is two colours, and the high air is the darker', PALETTES.every((p) => (
     luminance(p.fog.high) < luminance(p.fog.color)
   )));
+
+  check('no sun stands behind the camera', (() => (
+    // The stage-1 gate: the sun has to be readable from a single glance at any
+    // preset. A key within a few degrees of the lens is the flattest light
+    // there is — nothing the camera sees is turned away from it, and every
+    // shadow falls behind the thing that cast it, where it cannot be seen.
+    // Sixty degrees is the floor; most of these are near ninety.
+    PALETTES.every((p) => sunOffsetDeg(p.light.dir) >= 60)
+  ))(), PALETTES.map((p, i) => `${i}: ${sunOffsetDeg(p.light.dir).toFixed(0)}°`).join(', '));
+
+  check('no sun stands overhead either', PALETTES.every((p) => {
+    // Elevation, from the same numbers. Near the zenith a sun has no direction
+    // to read and casts no shadow long enough to see: 20°–50° is the band that
+    // rakes. It also has to be above the horizon at all, in every realm.
+    const [x, y, z] = p.light.dir;
+    const deg = (Math.atan2(y, Math.hypot(x, z)) * 180) / Math.PI;
+    return deg >= 20 && deg <= 50;
+  }), PALETTES.map((p, i) => {
+    const [x, y, z] = p.light.dir;
+    return `${i}: ${((Math.atan2(y, Math.hypot(x, z)) * 180) / Math.PI).toFixed(0)}°`;
+  }).join(', '));
+
+  check('the sun sweeps the sky rather than sitting in one corner', (() => {
+    // Eight realms all keyed from the same bearing would be one lighting setup
+    // wearing eight colour schemes. At least one has to come from behind.
+    const offs = PALETTES.map((p) => sunOffsetDeg(p.light.dir));
+    return Math.max(...offs) > 140 && Math.max(...offs) - Math.min(...offs) > 50;
+  })());
+}
+
+section('Light and tone — the three-light rig');
+{
+  const lighting = readFileSync(new URL('../js/view3d/lighting.js', import.meta.url), 'utf8');
+  const shaders = readFileSync(new URL('../js/view3d/shaders.js', import.meta.url), 'utf8');
+  const index = readFileSync(new URL('../js/view3d/index.js', import.meta.url), 'utf8');
+  const post = readFileSync(new URL('../js/view3d/post.js', import.meta.url), 'utf8');
+
+  check('there are exactly three lights, and no ambient anywhere', (() => {
+    // Ambient light is the one light that cannot describe form: it lifts the
+    // shadow side by exactly what it lifts the lit side. Removing it is the
+    // single largest thing this stage did, so it is the thing most worth
+    // guarding — including against a well-meaning `AmbientLight` added later
+    // to "fix" a dark corner.
+    const built = lighting.match(/new THREE\.[A-Za-z]*Light\(/g) || [];
+    const anywhere = [lighting, shaders, index].some((s) => /new THREE\.AmbientLight/.test(s));
+    return built.length === 3 && !anywhere
+      && /new THREE\.DirectionalLight\(/.test(lighting)
+      && /new THREE\.HemisphereLight\(/.test(lighting);
+  })());
+
+  check('only the sun casts, and its shadow camera is fitted to the island', (() => {
+    // The range is four hundred units deep. A shadow map stretched over it has
+    // no texels left for the thing the shadow is for, which is the figure on
+    // her shelf — so the frustum is fitted to the foreground and the peaks are
+    // left alone, exactly as the brief says.
+    const casts = lighting.match(/castShadow = true/g) || [];
+    const num = (name) => Number((lighting.match(new RegExp(`${name}: ([0-9.]+)`)) || [])[1]);
+    return casts.length === 1 && /castShadow = false/.test(lighting)
+      && num('extent') <= 40 && num('mapSize') === 1024
+      && /shadow\.mapSize\.set\(ISLAND\.mapSize, ISLAND\.mapSize\)/.test(lighting);
+  })());
+
+  check('the renderer is ACES, sRGB and soft shadows', (() => (
+    /outputColorSpace = THREE\.SRGBColorSpace/.test(index)
+    && /toneMapping = THREE\.ACESFilmicToneMapping/.test(index)
+    && /toneMappingExposure = 1\.0/.test(index)
+    && /shadowMap\.enabled = true/.test(index)
+    && /shadowMap\.type = THREE\.PCFSoftShadowMap/.test(index)
+    && /ColorManagement\.enabled = true/.test(index)
+  ))());
+
+  check('the pixel ratio is capped at two whatever the tier asks', (() => (
+    // A phone reporting 3 or 4 buys nothing anybody can see and costs real
+    // frames. The tier cap still applies underneath it.
+    /Math\.min\(window\.devicePixelRatio \|\| 1, 2\)/.test(index)
+  ))());
+
+  check('the tone curve is applied once, to linear light, in the last pass', (() => {
+    // Scene-referred in, display-referred out — and in that order. ACES
+    // applied to values that are already gamma-encoded has no shoulder left to
+    // roll off, which is the whole reason for the curve.
+    const grade = shaders.slice(shaders.indexOf('export function makePostMaterial'));
+    return /acesFilmic\(col \* uExposure\)/.test(grade)
+      && /linearToSRGB\(acesFilmic/.test(grade)
+      && grade.indexOf('linearToSRGB(acesFilmic') < grade.indexOf('smoothstep(1.05, 0.44, v)')
+      && (shaders.match(/vec3 acesFilmic/g) || []).length === 1;
+  })());
+
+  check('exposure has one dial, and Stage 2 turns it on the renderer', (() => (
+    /uExposure\.value = renderer\.toneMappingExposure/.test(post)
+  ))());
+
+  check('the post stack is RenderPass, bloom, grade — and nothing else', (() => {
+    // No DOF and no SSAO: both cost more than everything else here put
+    // together, on a landscape read at arm's length on a handset.
+    const passes = post.match(/composer\.addPass\(([a-zA-Z]+)\)/g) || [];
+    return passes.length === 3
+      && /new RenderPass\(/.test(post) && /new UnrealBloomPass\(/.test(post)
+      && /new ShaderPass\(postMat\)/.test(post)
+      && !/(BokehPass|SSAOPass|GTAOPass|SAOPass)\.js/.test(post);
+  })());
+
+  check('the bloom is the brief\'s bloom, at half resolution', (() => (
+    // UnrealBloomPass starts its mip chain at half the size it is handed and
+    // never touches the full-resolution buffer, which is what makes five
+    // blurred mips affordable on a phone.
+    /threshold: 0\.85, strength: 0\.4, radius: 0\.6/.test(post)
+    && /BLOOM\.strength, BLOOM\.radius, BLOOM\.threshold/.test(post)
+  ))());
+
+  check('the vignette and the grain are inside the brief', (() => {
+    const grade = shaders.slice(shaders.indexOf('export function makePostMaterial'));
+    const num = (name) => Number((grade.match(new RegExp(`${name}: \\{ value: ([0-9.]+)`)) || [])[1]);
+    return Math.abs(num('uVignette') - 0.35) < 0.02 && num('uGrain') <= 0.02;
+  })());
+
+  check('nothing in the shading reads a flat ambient term any more', (() => (
+    // The hemisphere replaced it: same cost, but a function of the normal, so
+    // a face turned up to the sky and one turned down to the valley differ
+    // before the sun has said anything.
+    !/uAmbient/.test(shaders) && /vec3 hemisphere\(vec3 n\)/.test(shaders)
+  ))());
+
+  check('the key light has somewhere to fall to', (() => {
+    // A full half-lambert wrap hands a surface pointing away from the sun half
+    // of the key, which leaves the shading no range to spend. The wrap is a
+    // quarter now — soft, but with a real zero at the bottom.
+    const m = shaders.match(/dot\(n, normalize\(uLightDir\)\) \+ ([0-9.]+)\) \/ ([0-9.]+)/);
+    return !!m && Number(m[1]) <= 0.35 && Math.abs(Number(m[2]) - (1 + Number(m[1]))) < 1e-9;
+  })());
+
+  check('the rim is an edge, not a wash over the foreground', (() => (
+    // A fresnel term on a shelf twenty-five units across, seen from eight
+    // degrees above it, is not an edge — at a low exponent it was two thirds
+    // of the light on the whole foreground, and no sun or shadow could touch
+    // any of it.
+    /pow\(1\.0 - max\(dot\(n, v\), 0\.0\), 4\.0\) \* \(1\.0 - 0\.7 \* ramp\)/.test(shaders)
+  ))());
+
+  check('the ink materials can actually receive the shadow', (() => (
+    // Three's own chunks, so shadowMap.type, bias, normalBias, radius and
+    // intensity on the light are all live rather than decorative.
+    /lights: true/.test(shaders) && /shadowmap_pars_fragment/.test(shaders)
+    && /shadowmap_vertex/.test(shaders) && /getShadow\(directionalShadowMap/.test(shaders)
+    && /uniform bool receiveShadow/.test(shaders)
+  ))());
+
+  check('sharing the env uniforms survives the lights merge', (() => (
+    // UniformsUtils.merge deep-clones, which would hand every material its own
+    // private uTime and uLightDir — and the whole file is built on those being
+    // shared by reference so one realm transition re-lights the world.
+    /Object\.assign\(\s*THREE\.UniformsUtils\.clone\(THREE\.UniformsLib\.lights\)/.test(shaders)
+    && !/UniformsUtils\.merge\(/.test(shaders)
+  ))());
+
+  check('the figure casts and the platform receives', (() => {
+    const avatar = readFileSync(new URL('../js/view3d/avatar.js', import.meta.url), 'utf8');
+    const world = readFileSync(new URL('../js/view3d/world.js', import.meta.url), 'utf8');
+    // She casts; she does not receive. At thirty units over a 1024 map she is
+    // about sixty texels tall — enough to lay a clean shadow on the shelf,
+    // nowhere near enough to resolve her own folds without acne.
+    return /mesh\.castShadow = true/.test(avatar) && !/receiveShadow/.test(avatar)
+      && /shelf\.receiveShadow = true/.test(world) && /stone\.castShadow = true/.test(world);
+  })());
+
+  check('the QA harness never looks at a stale build', (() => {
+    // The service worker is cache-first over the whole shell, so on a machine
+    // that has played once it serves yesterday's modules to today's page — and
+    // the contact sheet is then a picture of a build that no longer exists.
+    const main = readFileSync(new URL('../js/main.js', import.meta.url), 'utf8');
+    return /if \(DEBUG\) \{[\s\S]*?getRegistrations[\s\S]*?unregister/.test(main)
+      && /serviceWorker\.register\('\.\/sw\.js'\)/.test(main);
+  })());
 }
 
 section('Framing — composing against the authored camera');
@@ -1729,13 +1902,17 @@ section('Camera lock — grayscale is true luminance');
 
   check('the toggle ships off', /uGrayscale: \{ value: 0 \}/.test(post));
 
-  check('it survives a tier with no post pass', (() => {
-    // `low` renders straight to the canvas, so the grayscale toggle has to be
-    // able to force the post target into existence or the primary QA
-    // instrument silently does nothing on the tier that needs it most.
+  check('it works on every tier, because the grade is not optional', (() => {
+    // The instrument used to have to force a render target into existence on
+    // `low`, which shipped without a post pass at all. It cannot any more: the
+    // last pass of the composer is what tone maps and encodes the frame, so a
+    // tier without it would be putting raw linear light on an sRGB screen.
+    // Bloom is the quality setting now; the grade runs everywhere, and so does
+    // the toggle that lives inside it.
     const src = readFileSync(new URL('../js/view3d/index.js', import.meta.url), 'utf8');
-    return TIERS.low.post === false && /forcePost/.test(src)
-      && /function setGrayscale/.test(src) && /postOn\(\)/.test(src);
+    return Object.values(TIERS).every((t) => t.post === undefined)
+      && TIERS.low.bloom === false && TIERS.high.bloom === true
+      && /function setGrayscale/.test(src) && !/forcePost/.test(src);
   })());
 }
 

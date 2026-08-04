@@ -4,7 +4,7 @@
 // cache-first strategy is both correct and the fastest possible boot. Bump
 // CACHE when shipping.
 
-const CACHE = 'myriad-dao-v0.8.0';
+const CACHE = 'myriad-dao-v0.9.0';
 
 const SHELL = [
   './',
@@ -12,6 +12,14 @@ const SHELL = [
   './styles.css',
   './manifest.webmanifest',
   './vendor/three.module.min.js',
+  './vendor/three-addons/postprocessing/EffectComposer.js',
+  './vendor/three-addons/postprocessing/RenderPass.js',
+  './vendor/three-addons/postprocessing/ShaderPass.js',
+  './vendor/three-addons/postprocessing/MaskPass.js',
+  './vendor/three-addons/postprocessing/Pass.js',
+  './vendor/three-addons/postprocessing/UnrealBloomPass.js',
+  './vendor/three-addons/shaders/CopyShader.js',
+  './vendor/three-addons/shaders/LuminosityHighPassShader.js',
   './js/main.js',
   './js/engine.js',
   './js/data.js',
@@ -21,6 +29,8 @@ const SHELL = [
   './js/audio.js',
   './js/view3d/index.js',
   './js/view3d/shaders.js',
+  './js/view3d/lighting.js',
+  './js/view3d/post.js',
   './js/view3d/palette.js',
   './js/view3d/quality.js',
   './js/view3d/world.js',

@@ -23,6 +23,32 @@
 // range of mountains turned into a smear. `peaks` and `cloud` below are chosen
 // against `sky`, and tests/run.js asserts the ladder holds for all eight — this
 // is the invariant the art depends on, so it is checked rather than trusted.
+//
+// ---------------------------------------------------------------------------
+// The second rule: where the sun stands
+//
+// `light.dir` points *at* the sun. It used to be a free number, because in the
+// old renderer all it decided was which flank of a ridge took the warm ramp.
+// It decides a great deal more now — it is the DirectionalLight that renders
+// the shadow map, so it also decides where every shadow in the frame falls.
+//
+// Five of these eight had the sun within fifteen degrees of the camera's own
+// bearing. A key light behind the viewer's head is the flattest light there
+// is: every surface the camera can see is a surface the sun can see, no plane
+// turns away, and every shadow in the picture falls into the exact place the
+// figure that cast it is standing in front of. It is, on its own, most of why
+// this landscape read as coloured paper. `sunOffsetDeg()` in framing.js
+// measures it and the suite holds every sky to a floor, so it cannot come back.
+//
+// The camera is locked at yaw 0.62 rad, so it looks in along a bearing of 35°.
+// Every sun here now stands at least 60° off that, which is what puts a lit
+// face and a shadowed face on the same rock and lays the cultivator's shadow
+// across the shelf instead of behind her. Six key from the left, so the shadow
+// runs into the open right of the frame; two of the night skies key from
+// behind, where the range is rimmed and the shadow comes toward the eye.
+// Elevation is each realm's own — a low raking sunset, a high golden noon —
+// except that nothing sits within thirty degrees of the zenith any more,
+// because a sun overhead has no direction to read either.
 // ---------------------------------------------------------------------------
 
 export const PALETTES = [
@@ -31,7 +57,7 @@ export const PALETTES = [
     // Air is two colours: bright along the skyline, colder and darker up where
     // the summits are. One flat fog colour makes every distance identical.
     fog: { color: '#8d96a2', high: '#4f5966', density: 0.0105 },
-    light: { dir: [0.30, 0.55, 0.62], color: '#ffeede' },
+    light: { dir: [-0.54, 0.48, 0.42], color: '#ffeede' },   // 88° off the lens, 35° up
     ambient: '#333c46',
     ground: '#2b3038',
     ridges: ['#252b34', '#2f3742', '#3b4552', '#495564', '#5a6673'],
@@ -49,7 +75,7 @@ export const PALETTES = [
   { // 1 — Qi Condensation: teal morning
     sky: { top: '#10333a', mid: '#1c5560', horizon: '#7fc4c0' },
     fog: { color: '#6fb0ab', high: '#2e6a6e', density: 0.0095 },
-    light: { dir: [0.38, 0.60, 0.55], color: '#fff6e0' },
+    light: { dir: [-0.57, 0.45, 0.35], color: '#fff6e0' },   // 94°, 34° up
     ambient: '#23414a',
     ground: '#1c3038',
     ridges: ['#12292f', '#193740', '#22474f', '#2d5a61', '#3a6d70'],
@@ -67,7 +93,7 @@ export const PALETTES = [
   { // 2 — Foundation Establishment: amber sunset
     sky: { top: '#2a1a24', mid: '#7a3a26', horizon: '#f2b26b' },
     fog: { color: '#c2865c', high: '#5e3830', density: 0.0088 },
-    light: { dir: [-0.45, 0.38, 0.55], color: '#ffd9a0' },
+    light: { dir: [-0.63, 0.38, 0.33], color: '#ffd9a0' },   // 98°, 28° up — the lowest
     ambient: '#46262a',
     ground: '#3a2420',
     ridges: ['#2a171e', '#3a2124', '#4c2e2a', '#5f3c31', '#744c3c'],
@@ -86,7 +112,7 @@ export const PALETTES = [
   { // 3 — Core Formation: violet dusk
     sky: { top: '#150f2b', mid: '#382a63', horizon: '#9c7fc4' },
     fog: { color: '#8b74b0', high: '#3b2d5e', density: 0.0092 },
-    light: { dir: [-0.30, 0.50, 0.60], color: '#e0d0ff' },
+    light: { dir: [-0.63, 0.45, 0.23], color: '#e0d0ff' },   // 106°, 34° up
     ambient: '#2b2450',
     ground: '#22193a',
     ridges: ['#1a1330', '#221a3c', '#2d2249', '#3a2c5c', '#4a3a70'],
@@ -104,7 +130,7 @@ export const PALETTES = [
   { // 4 — Nascent Soul: starry indigo
     sky: { top: '#05070f', mid: '#0d1330', horizon: '#2c3a63' },
     fog: { color: '#33436e', high: '#131a30', density: 0.0078 },
-    light: { dir: [0.25, 0.62, 0.55], color: '#cfe0ff' },
+    light: { dir: [0.56, 0.35, -0.23], color: '#cfe0ff' },   // 77° from the far side, 30° up
     ambient: '#141c38',
     ground: '#0d1120',
     ridges: ['#070a14', '#0b1020', '#10182c', '#16203a', '#1d2a48'],
@@ -123,7 +149,7 @@ export const PALETTES = [
   { // 5 — Spirit Severing: the great moon
     sky: { top: '#060a12', mid: '#101a2a', horizon: '#33455c' },
     fog: { color: '#3c4f66', high: '#18212e', density: 0.0072 },
-    light: { dir: [-0.45, 0.42, -0.55], color: '#dfe8f5' },
+    light: { dir: [-0.62, 0.42, -0.36], color: '#dfe8f5' },  // 156°: the moon behind the range
     ambient: '#18222f',
     ground: '#0f151d',
     ridges: ['#080d14', '#0d131c', '#121a24', '#18222e', '#202c3c'],
@@ -144,7 +170,7 @@ export const PALETTES = [
     // and the far rank pushed down to keep the range readable against it.
     sky: { top: '#03080c', mid: '#07161c', horizon: '#1a4d4b' },
     fog: { color: '#2a5f5c', high: '#0b2020', density: 0.0066 },
-    light: { dir: [0.20, 0.70, 0.42], color: '#c8ffe8' },
+    light: { dir: [-0.42, 0.30, 0.20], color: '#c8ffe8' },   // 100°, 33° up
     ambient: '#0d2228',
     ground: '#08161a',
     ridges: ['#03090c', '#061114', '#0a1c1e', '#0f2829', '#153634'],
@@ -162,7 +188,7 @@ export const PALETTES = [
   { // 7 — Immortal Ascension: a golden sea of clouds
     sky: { top: '#1a1408', mid: '#4a3410', horizon: '#f0c874' },
     fog: { color: '#d5a75c', high: '#6b501c', density: 0.0060 },
-    light: { dir: [0.10, 0.80, 0.40], color: '#fff0c8' },
+    light: { dir: [0.40, 0.32, -0.11], color: '#fff0c8' },   // 70°, 38° up — the highest of the eight
     ambient: '#52401c',
     ground: '#3a2c10',
     ridges: ['#1c1508', '#261d0b', '#332710', '#443416', '#57431e'],

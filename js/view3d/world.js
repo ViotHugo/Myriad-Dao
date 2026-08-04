@@ -84,7 +84,7 @@ function ridgeGeometry({ width, height, depth, segments, seed, roughness = 1, fa
 
 /* ------------------------------------------------------------- the world */
 
-export function createWorld(env, tier) {
+export function createWorld(env, tier, lighting) {
   const group = new THREE.Group();
 
   /* sky ------------------------------------------------------------- */
@@ -181,25 +181,44 @@ export function createWorld(env, tier) {
   group.add(ridges);
 
   /* the shelf the cultivator sits on ---------------------------------- */
-  const groundMat = makeInkMaterial(env, { color: '#2b3038', rim: 0.25, bands: 3 });
+  //
+  // Everything from here to the standing rocks is the foreground island, and
+  // the island is the only thing the sun's shadow camera is fitted to. So it
+  // is also the only thing that carries a shadow flag: `receiveShadow` is a
+  // per-object uniform the renderer sets, so the far midground below shares
+  // these same materials and pays nothing for a lookup that could only ever
+  // come back "lit".
+  // rim 0.25 → 0.08. Two reasons, and both are about a plane rather than about
+  // this colour. A fresnel edge on the one surface in the frame that is never
+  // seen edge-on is not an edge, it is a veil over the whole foreground — and
+  // `uRimColor` is the palette's accent, which is the one colour the rules say
+  // may not sit on a background element. It is still not zero: a trace of sky
+  // along the far lip is what keeps the shelf from ending on a cut.
+  const groundMat = makeInkMaterial(env, { color: '#2b3038', rim: 0.08, bands: 3 });
   const shelf = new THREE.Mesh(new THREE.CylinderGeometry(9.5, 12.5, 3.2, 7, 1), groundMat);
   shelf.position.y = -1.6;
+  shelf.receiveShadow = true;
   group.add(shelf);
 
   const apron = new THREE.Mesh(new THREE.CylinderGeometry(13, 26, 14, 7, 1, true), groundMat);
   apron.position.y = -9.6;
+  apron.receiveShadow = true;
   group.add(apron);
 
   // A meditation stone, slightly proud of the shelf.
   const stoneMat = makeInkMaterial(env, { color: '#39404a', rim: 0.4, bands: 3, flat: true });
   const stone = new THREE.Mesh(new THREE.CylinderGeometry(2.4, 2.8, 0.5, 9, 1), stoneMat);
   stone.position.y = 0.15;
+  stone.castShadow = true;
+  stone.receiveShadow = true;
   group.add(stone);
 
   // A few standing rocks, for the negative space to push against. One draw
   // call: five separate meshes here cost as much as the whole karst range.
   const ROCKS = 5;
   const rocks = new THREE.InstancedMesh(stoneGeometry(97), stoneMat, ROCKS);
+  rocks.castShadow = true;
+  rocks.receiveShadow = true;
   {
     const rrand = mulberry32(97);
     const m = new THREE.Matrix4();
@@ -363,6 +382,10 @@ export function createWorld(env, tier) {
     ridges: LAYERS.map(() => new THREE.Color()),
     density: 0.01,
     dir: new THREE.Vector3(),
+    // The sun as the light rig wants it: how hard it is, and what colour it
+    // rims with. Both were already authored per realm and only the karst
+    // material was reading them.
+    sunColor: new THREE.Color(), sunPower: 0.6,
     flags: { stars: 0, aurora: 0, moon: 0, cloudSea: 0 },
   };
 
@@ -384,6 +407,8 @@ export function createWorld(env, tier) {
     p.ridges.forEach((c, i) => cur.ridges[i].lerp(new THREE.Color(c), k));
     cur.density += (p.fog.density - cur.density) * k;
     cur.dir.lerp(new THREE.Vector3(...p.light.dir).normalize(), k);
+    cur.sunColor.lerp(new THREE.Color(p.sun.color), k);
+    cur.sunPower += (p.sun.power - cur.sunPower) * k;
     for (const f of ['stars', 'aurora', 'moon', 'cloudSea']) {
       const target = tier.stars || f !== 'stars' ? p.flags[f] : 0;
       cur.flags[f] += (target - cur.flags[f]) * k;
@@ -401,10 +426,13 @@ export function createWorld(env, tier) {
     env.uFogColor.value.copy(cur.fog);
     env.uFogHigh.value.copy(cur.fogHigh);
     env.uFogDensity.value = cur.density;
-    env.uAmbient.value.copy(cur.ambient);
-    env.uLightColor.value.copy(cur.light);
-    env.uLightDir.value.copy(cur.dir);
     env.uRimColor.value.copy(cur.rim);
+
+    // The sun, the sky bounce and the rim are the light rig's to write — it
+    // owns both the THREE.Lights that render the shadow map and the uniforms
+    // the ink shaders read, so there is no way for the two to disagree about
+    // where the light is coming from.
+    lighting.apply(cur);
 
     groundMat.uniforms.uColor.value.copy(cur.ground);
     for (const { mat, layer } of ridgeMats) mat.uniforms.uColor.value.copy(cur.ridges[layer]);
