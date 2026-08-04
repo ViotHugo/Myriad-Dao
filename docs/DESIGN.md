@@ -119,18 +119,112 @@ is the entire interactive content of a duel. The material now takes a `core`
 parameter that mixes the rim term toward a solid disc; anything read as a light
 or a widget sets it.
 
-### Colour management is deliberately off
+### Linear light, ACES, and one place where it becomes pixels
 
-`THREE.ColorManagement.enabled = false`, and `outputColorSpace` is
-`LinearSRGBColorSpace`.
+`THREE.ColorManagement.enabled = true`, `outputColorSpace = SRGBColorSpace`,
+`toneMapping = ACESFilmicToneMapping`, `toneMappingExposure = 1.0`.
 
-This renderer is entirely authored: hand-written toon ramps, no PBR, no physical
-light units. With colour management on, Three converts every palette hex into
-linear working space, but a custom `ShaderMaterial` gets no automatic
-linear→sRGB conversion on the way out — so the world renders at roughly 40% of
-the brightness it was painted at. Turning it off means the hexes in
-`palette.js` are exactly the pixels on screen, which is what you want when the
-palette *is* the art direction.
+The shading is still entirely authored — hand-written toon ramps, no PBR, no
+physical light units — but it is authored in *linear light*. Every palette hex
+is converted from sRGB into the linear working space on the way in; the scene is
+lit, fogged and bloomed there; and the **last pass of the composer** applies
+exposure, the ACES curve and the sRGB encode, once.
+
+Colour management used to be off, on the reasoning that a custom `ShaderMaterial`
+gets no automatic linear→sRGB conversion on the way out, so the world would
+render at roughly 40% of the brightness it was painted at. That was true and is
+now handled — and it had to be, because **a tone curve applied to values that
+are already gamma-encoded has no shoulder left to roll off.** ACES exists to take
+a value of three and land it near white instead of clipping it to a flat plate;
+inside 0..1 there is nothing for it to do. Half of "the picture looks flat" was
+exactly that.
+
+The two colours the post pass mixes in *after* the encode — the rebirth ink and
+the tribulation flash — are display-referred and take no conversion at all.
+`displayColor()` in `shaders.js` is how that is said out loud.
+
+`renderer.toneMappingExposure` is the single exposure dial. The post pass reads
+it every frame rather than holding its own copy, so time-of-day grading has one
+number to turn.
+
+### The light rig: three lights, and no ambient
+
+`js/view3d/lighting.js`. One `DirectionalLight` for the sun (the only caster),
+one `HemisphereLight` at 0.35 for the sky bounce, one low `DirectionalLight`
+behind and above the cultivator for her rim. There is no `AmbientLight`, and the
+suite fails if one appears.
+
+**Ambient light is the one light that cannot describe form.** It lifts the shadow
+side by exactly what it lifts the lit side, so the difference between them — the
+only thing carrying the shape — becomes a fraction of the total. The hemisphere
+replaces it at the same cost and varies with the normal, so a face turned up to
+the sky and a face turned down to the valley differ before the sun has spoken.
+
+The rig is the single source of truth for both consumers: it positions the real
+`THREE.Light`s that render the shadow map, *and* writes the same direction,
+colour and intensity into the shared `env` uniforms the ink shaders read.
+
+The sun's shadow camera is fitted to the **foreground island only** — 30 world
+units at 1024, about 3 cm per texel on the shelf. The range is four hundred units
+deep; a map stretched over it has no texels left for the thing the shadow is
+actually for, which is the figure on her platform. The peaks are not shadowed and
+are not meant to be. The ink materials receive through three's own `shadowmap`
+chunks, so `shadowMap.type`, `bias`, `normalBias`, `radius` and `intensity` on
+the light are all live rather than decorative.
+
+She casts and does not receive: at 60 texels tall she can lay a clean shadow on
+the shelf but cannot resolve her own folds, and asking gives a figure crawling
+with acne.
+
+### Two things that were flattening every frame
+
+Both were in the shading model, and neither was visible as a bug.
+
+**The key had nowhere to fall to.** `dot(n, L) * 0.5 + 0.5` is a full
+half-lambert wrap, which hands a surface pointing *directly away from the sun*
+half of the key. With the ambient term on top, the difference between the lit
+face of a rock and its shadowed face was a few percent of the total, and no
+shadow map or rim light can rescue a picture from that — the shading has no range
+left to spend. The wrap is a quarter now: still soft, because an ink-wash shadow
+side is not a hard terminator, but with a real zero at the bottom.
+
+**The rim was a wash, not an edge.** A fresnel term is only an edge on something
+with a silhouette. On a shelf twenty-five units across, seen from eight degrees
+above it, `1 - dot(n, v)` is 0.87 over the whole surface — so at the exponent it
+was running at, two thirds of the light on the entire foreground was a
+view-dependent term that no sun and no shadow could touch. It is a fourth power
+now, gated on the key (an edge light is what you see where the key is not), and
+the ground's own rim coefficient is down to a trace. That coefficient also drove
+the palette's **accent** colour across the largest background surface in the
+frame, which the art rules forbid outright.
+
+### Where the sun stands
+
+`light.dir` used to be a free number, because all it decided was which flank of a
+ridge took the warm ramp. It decides where every shadow falls now.
+
+Five of the eight skies had the sun within fifteen degrees of the camera's own
+bearing. A key behind the viewer's head is the flattest light there is: nothing
+the camera sees is turned away from it, and every shadow falls behind the thing
+that cast it. `sunOffsetDeg()` in `framing.js` measures the angle between the
+two bearings, and the suite holds every sky to a 60° floor and a 20°–50°
+elevation band, so it cannot come back. Six key from the left, so the shadow runs
+into the open right of the frame; the moon realm keys from behind at 156°.
+
+### The post stack
+
+`js/view3d/post.js` — `EffectComposer` over `RenderPass` → `UnrealBloomPass`
+(threshold 0.85, strength 0.4, radius 0.6, half resolution by construction) →
+`ShaderPass` carrying the game's own grade material. No DOF and no SSAO: both
+cost more than everything above put together.
+
+`post` is no longer a quality tier flag. The last pass is what tone maps and
+encodes the frame, so a tier without it would be putting raw linear light on an
+sRGB screen. **Bloom** is the tier setting; the grade runs everywhere, and so
+does the grayscale QA toggle that lives inside it.
+
+The addons are vendored verbatim under `vendor/three-addons/`, pinned to the same
+`three` revision as the core.
 
 ### The eight skies as a lighting script
 
@@ -599,7 +693,7 @@ A18 pacing table.
 npm run sim          # idle pacing
 npm run sim:active   # sustained tapping
 npm run balance      # assert the A18 table, exit 1 on drift
-npm test             # 223 engine checks
+npm test             # 331 engine and renderer checks
 ```
 
 `--check` runs both modes across several seeds and fails if any milestone leaves
@@ -688,8 +782,32 @@ and it is implemented exactly as specified.
 
 Rendering bugs do not show up in unit tests — every one of the faults above
 passed a fully green suite while being plainly wrong on screen. They are found by
-looking. `tools/` has no screenshot harness (it would need a browser in CI), but
-the working method is worth writing down:
+looking. `npm run sheet` and `npm run sheet:gray` shoot the sixteen-frame contact
+sheet; the method behind it is worth writing down:
+
+**The harness must never look at a stale build.** The service worker is
+cache-first over the whole shell, so on a machine that has played once it serves
+yesterday's modules to today's page — and the contact sheet is then a picture of
+a build that no longer exists. That is worse than having no instrument at all,
+because it agrees with you: two rounds of stage-1 tuning were judged against
+frames rendered by the pre-stage code before anyone noticed the sheets were 97%
+identical to the baseline. A dev build now unregisters any worker it finds and
+drops its caches.
+
+**Value separation is a number, not a feeling.** Two contact sheets, decoded,
+compared: mean luminance says whether the exposure moved, standard deviation says
+how much range the picture is using, and mean |Laplacian| says how much local
+form there is. Stage 1 moved the grayscale sheet from sd 48.3 to 61.0 (+26%) at
+the same mean, with local contrast up 17% *despite* the paper grain being cut
+from 5.5% to 2%. "It looks better" is not a gate; that is.
+
+**A/B the light itself.** Toggling `sun.castShadow` and differencing the two
+frames isolates exactly what the shadow contributes, in pixels and in levels. It
+is how the contact shadow was found to be rendering correctly while landing
+directly behind the figure in five of the eight skies — a composition fault that
+no amount of staring at the shadow code would have turned up.
+
+The rest of the method:
 
 1. Drive the real build in headless Chromium at a phone viewport.
 2. Capture every realm, every sect tier, each set piece, and the withered state.

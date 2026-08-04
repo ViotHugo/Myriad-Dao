@@ -13,20 +13,25 @@
 //   pixel ratio of 3 meant a frame drawn at a quarter of the linear resolution
 //   of the screen it was stretched across.
 //
-//   `antialias` is a flag on the *canvas* context. Both tiers that set it also
-//   set `post`, and a post pass renders into a WebGLRenderTarget instead — so
-//   the flag applied to a framebuffer that was never drawn to, and the frame
-//   the player saw had no antialiasing at all. `msaa` is the one that counts:
-//   it multisamples the render target the scene actually goes into.
+//   `antialias` is a flag on the *canvas* context, and the scene is drawn into
+//   a WebGLRenderTarget — so the flag applies to a framebuffer that is never
+//   drawn to, and the frame the player sees gets nothing from it. `msaa` is
+//   the one that counts: it multisamples the target the scene really goes
+//   into, and since every tier now composites, every tier needs it.
+//
+// `post` used to be a tier flag, and is not one any more. The composer's last
+// pass is what tone maps and encodes the frame, so a tier without it would be
+// showing raw linear light on an sRGB screen. What is still a tier setting is
+// `bloom` — five blurred mips is a real cost and a phone can decline it.
 
 export const TIERS = {
   low: {
     name: 'Low',
     pixelRatio: 1.25,
     renderScale: 0.85,
-    post: false,
+    bloom: false,
     antialias: false,
-    msaa: 0,
+    msaa: 2,
     mistBands: 2,
     ridgeLayers: 3,
     qiMotes: 60,
@@ -50,7 +55,7 @@ export const TIERS = {
     name: 'Medium',
     pixelRatio: 1.5,
     renderScale: 1,
-    post: true,
+    bloom: true,
     antialias: false,
     msaa: 4,
     mistBands: 4,
@@ -75,7 +80,7 @@ export const TIERS = {
     name: 'High',
     pixelRatio: 2,
     renderScale: 1,
-    post: true,
+    bloom: true,
     antialias: true,
     msaa: 4,
     mistBands: 6,

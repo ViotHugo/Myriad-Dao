@@ -76,6 +76,28 @@ export const FOG = /* glsl */ `
   }
 `;
 
+/**
+ * ACES filmic, the Narkowicz fit, plus the linear→sRGB encode that has to
+ * follow it.
+ *
+ * The reason the whole renderer works in linear now and only converts here:
+ * ACES is a curve on *light*, and its whole value is the shoulder — the bit
+ * that takes a value of three and lands it near white instead of clipping it
+ * to a flat plate. Applied to numbers that have already been gamma-encoded it
+ * has nothing to roll off, because everything is already inside 0..1.
+ */
+const ACES = /* glsl */ `
+  vec3 acesFilmic(vec3 x) {
+    const float a = 2.51, b = 0.03, c = 2.43, d = 0.59, e = 0.14;
+    return clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);
+  }
+  vec3 linearToSRGB(vec3 c) {
+    return mix(c * 12.92,
+      1.055 * pow(max(c, vec3(0.0)), vec3(0.41666)) - 0.055,
+      step(vec3(0.0031308), c));
+  }
+`;
+
 // Instancing-aware position/normal, so one shader serves meshes and swarms.
 const INSTANCE_VERT = /* glsl */ `
   vec4 localPos = vec4(position, 1.0);
@@ -88,13 +110,31 @@ const INSTANCE_VERT = /* glsl */ `
 
 /* ------------------------------------------------------- shared uniforms */
 
-/** One bundle, shared by reference. Mutate `.value` and the world re-lights. */
+/**
+ * One bundle, shared by reference. Mutate `.value` and the world re-lights.
+ *
+ * Everything under "the rig" is written by lighting.js from the three real
+ * lights, so the hand-written shading below and the THREE.Light that renders
+ * the shadow map are always describing the same sun. Nothing else may write
+ * them.
+ */
 export function createEnv() {
   return {
     uTime: { value: 0 },
+
+    // the rig — see lighting.js
     uLightDir: { value: new THREE.Vector3(0.4, 0.7, 0.55).normalize() },
     uLightColor: { value: new THREE.Color('#fff2dc') },
-    uAmbient: { value: new THREE.Color('#2a3340') },
+    uSunPower: { value: 1.9 },
+    // The hemisphere that replaced the ambient term. Sky above, ground below;
+    // there is no flat fill anywhere in this renderer any more.
+    uHemiSky: { value: new THREE.Color('#333c46') },
+    uHemiGround: { value: new THREE.Color('#2b3038') },
+    uHemiIrradiance: { value: 0.35 },
+    uRimLightDir: { value: new THREE.Vector3(-0.58, 0.55, -0.79).normalize() },
+    uRimLightColor: { value: new THREE.Color('#ffe8cf') },
+    uRimLightPower: { value: 0.55 },
+
     uFogColor: { value: new THREE.Color('#0b0e12') },
     uFogHigh: { value: new THREE.Color('#0b0e12') },
     uFogDensity: { value: 0.006 },
@@ -109,7 +149,13 @@ function envUniforms(env, extra = {}) {
     uTime: env.uTime,
     uLightDir: env.uLightDir,
     uLightColor: env.uLightColor,
-    uAmbient: env.uAmbient,
+    uSunPower: env.uSunPower,
+    uHemiSky: env.uHemiSky,
+    uHemiGround: env.uHemiGround,
+    uHemiIrradiance: env.uHemiIrradiance,
+    uRimLightDir: env.uRimLightDir,
+    uRimLightColor: env.uRimLightColor,
+    uRimLightPower: env.uRimLightPower,
     uFogColor: env.uFogColor,
     uFogHigh: env.uFogHigh,
     uFogDensity: env.uFogDensity,
@@ -117,6 +163,113 @@ function envUniforms(env, extra = {}) {
     uDesat: env.uDesat,
     uBands: env.uBands,
   }, extra);
+}
+
+/**
+ * The key light's response curve, as GLSL.
+ *
+ * This was `dot(n, L) * 0.5 + 0.5` — a full half-lambert wrap, which hands a
+ * surface pointing *directly away from the sun* half of the key. Combined with
+ * the ambient term it meant the difference between the lit face of a rock and
+ * its shadowed face was a few percent of the total, and there is no amount of
+ * shadow map or rim light that can rescue a picture from that: the shading has
+ * no range left to spend.
+ *
+ * A quarter-unit wrap keeps what the wrap was for — an ink-wash shadow side is
+ * soft, not a hard terminator, and a fully lambertian toon ramp puts a black
+ * crescent on every sphere — while giving the shadow side an actual zero to
+ * fall to. The hemisphere is what fills it back in, which is the difference
+ * between a shadow and a hole.
+ */
+const KEY = /* glsl */ `
+  uniform vec3 uLightDir;
+  float keyResponse(vec3 n) {
+    return clamp((dot(n, normalize(uLightDir)) + 0.25) / 1.25, 0.0, 1.0);
+  }
+`;
+
+/**
+ * The hemisphere fill, as GLSL.
+ *
+ * This is the whole of the indirect light in the renderer. It is one lerp, so
+ * it costs nothing next to the flat ambient it replaced — but it is a function
+ * of the normal, which the flat one was not, and that difference is most of
+ * why the shelf now has a top and a side instead of being one grey.
+ */
+const HEMI = /* glsl */ `
+  uniform vec3 uHemiSky, uHemiGround;
+  uniform float uHemiIrradiance;
+  vec3 hemisphere(vec3 n) {
+    return mix(uHemiGround, uHemiSky, n.y * 0.5 + 0.5) * uHemiIrradiance;
+  }
+`;
+
+/**
+ * The sun's shadow, sampled through three's own machinery.
+ *
+ * `renderer.shadowMap` renders the depth map from the DirectionalLight in
+ * lighting.js; these are the stock chunks that read it, so `shadowMap.type`,
+ * `shadow.bias`, `shadow.normalBias`, `shadow.radius` and `shadow.intensity`
+ * all do exactly what they say on the light. When shadows are off — or when
+ * nothing in the scene casts — `USE_SHADOWMAP` is never defined and every line
+ * of this compiles away to `1.0`.
+ *
+ * `receiveShadow` is a per-object uniform the renderer sets from the mesh, so
+ * the same material can be shared by the shelf (which receives) and the far
+ * midground (which is nowhere near the shadow camera and should not pay for a
+ * lookup that can only ever return "lit").
+ */
+const SHADOW_PARS_VERT = /* glsl */ `
+  #include <common>
+  #include <shadowmap_pars_vertex>
+`;
+
+/**
+ * The chunks want a `vec4 worldPosition` and a view-space `transformedNormal`
+ * in scope under exactly those names; this is the adapter from the names these
+ * materials use.
+ */
+const SHADOW_VERT = /* glsl */ `
+  #ifdef USE_SHADOWMAP
+    vec4 worldPosition = world;
+    vec3 transformedNormal = mat3(viewMatrix) * vNormalW;
+    #include <shadowmap_vertex>
+  #endif
+`;
+
+const SHADOW_PARS_FRAG = /* glsl */ `
+  #include <common>
+  #include <packing>
+  #include <shadowmap_pars_fragment>
+  #ifdef USE_SHADOWMAP
+    uniform bool receiveShadow;
+  #endif
+  float sunShadow() {
+    #if defined( USE_SHADOWMAP ) && NUM_DIR_LIGHT_SHADOWS > 0
+      if (!receiveShadow) return 1.0;
+      DirectionalLightShadow s = directionalLightShadows[ 0 ];
+      return getShadow(directionalShadowMap[ 0 ], s.shadowMapSize, s.shadowIntensity,
+        s.shadowBias, s.shadowRadius, vDirectionalShadowCoord[ 0 ]);
+    #else
+      return 1.0;
+    #endif
+  }
+`;
+
+/**
+ * Light uniforms the renderer fills in for any ShaderMaterial that declares
+ * `lights: true` — the shadow map, its matrix and the bias struct among them.
+ *
+ * Merged by assignment rather than by UniformsUtils.merge, because merge deep
+ * *clones*: it would hand every material its own private copy of `uTime` and
+ * `uLightDir`, and the one thing this whole file is built around is that those
+ * are shared by reference so a single realm transition re-lights the world.
+ */
+function litUniforms(env, extra = {}) {
+  return Object.assign(
+    THREE.UniformsUtils.clone(THREE.UniformsLib.lights),
+    envUniforms(env, extra),
+  );
 }
 
 /* ------------------------------------------------------ banded ink solids */
@@ -130,7 +283,10 @@ export function makeInkMaterial(env, {
   transparent = false, opacity = 1, fogCap = 1,
 } = {}) {
   return new THREE.ShaderMaterial({
-    uniforms: envUniforms(env, {
+    // Required for the renderer to upload the shadow map and its matrix; see
+    // litUniforms() and SHADOW_PARS_FRAG.
+    lights: true,
+    uniforms: litUniforms(env, {
       uColor: { value: new THREE.Color(color) },
       uRim: { value: rim },
       uEmissive: { value: emissive },
@@ -141,6 +297,7 @@ export function makeInkMaterial(env, {
     transparent,
     flatShading: flat,
     vertexShader: /* glsl */ `
+      ${SHADOW_PARS_VERT}
       varying vec3 vNormalW;
       varying vec3 vViewDir;
       varying float vDepth;
@@ -156,11 +313,16 @@ export function makeInkMaterial(env, {
         vec4 mv = viewMatrix * world;
         vDepth = -mv.z;
         gl_Position = projectionMatrix * mv;
+        ${SHADOW_VERT}
       }
     `,
     fragmentShader: /* glsl */ `
-      uniform vec3 uColor, uLightDir, uLightColor, uAmbient, uRimColor;
+      uniform vec3 uColor, uLightColor, uRimColor, uRimLightDir, uRimLightColor;
       uniform float uRim, uEmissive, uOpacity, uBands, uBandsOverride, uDesat, uFogCap;
+      uniform float uSunPower, uRimLightPower;
+      ${SHADOW_PARS_FRAG}
+      ${KEY}
+      ${HEMI}
       ${FOG}
       varying vec3 vNormalW;
       varying vec3 vViewDir;
@@ -169,14 +331,43 @@ export function makeInkMaterial(env, {
       varying float vWorldY;
       void main() {
         vec3 n = normalize(vNormalW);
-        float ndl = dot(n, normalize(uLightDir)) * 0.5 + 0.5;
+        vec3 v = normalize(vViewDir);
+        float ndl = keyResponse(n);
         float bands = uBandsOverride > 0.0 ? uBandsOverride : uBands;
         float ramp = floor(ndl * bands) / bands;
         ramp = mix(ramp, ndl, 0.25); // keep a little softness in the step
 
-        vec3 col = uColor * (uAmbient + uLightColor * ramp);
-        float rim = pow(1.0 - max(dot(n, normalize(vViewDir)), 0.0), 3.0);
-        col += uRimColor * rim * uRim;
+        // The sun, and what the shelf takes out of it. The shadow multiplies
+        // the key only — an occluded surface still sees the sky, which is what
+        // keeps a contact shadow reading as shade rather than as a hole.
+        vec3 col = uColor * (hemisphere(n) + uLightColor * uSunPower * ramp * sunShadow());
+
+        // The edges.
+        //
+        // A fresnel term is only an *edge* on something with a silhouette. On a
+        // shelf twenty-five units across, seen from eight degrees above it,
+        // 1 - dot(n, v) is 0.87 over the whole surface — so at the exponent
+        // this used to run at, two thirds of the light on the entire foreground
+        // was a view-dependent wash that no sun and no shadow could touch. That
+        // is a third of the frame that could not be lit, and it is the other
+        // half of why the picture was flat. A tighter exponent puts the term
+        // back where the word "rim" means something.
+        //
+        // Gating it on the key is the other half: an edge light is what you see
+        // where the key is not. Where the sun is already on a surface, the rim
+        // has nothing to separate it from.
+        float fres = pow(1.0 - max(dot(n, v), 0.0), 4.0) * (1.0 - 0.7 * ramp);
+
+        // The rim light proper: it appears where the surface faces the light
+        // standing behind her, so it is a light with a position rather than a
+        // halo painted evenly around every outline.
+        float back = smoothstep(0.20, 0.80, dot(n, normalize(uRimLightDir)));
+        col += uRimLightColor * fres * back * uRimLightPower * uRim;
+
+        // The ink-wash edge that was already here, halved: the directional rim
+        // above now carries the separation, and two full-strength rims stacked
+        // on one silhouette is a glow.
+        col += uRimColor * fres * uRim * 0.5;
         col += uColor * uEmissive;
 
         col = applyFogCapped(col, vDepth, uFogCap, vWorldY);
@@ -311,8 +502,10 @@ export function makeRockMaterial(env, {
       }
     `,
     fragmentShader: /* glsl */ `
-      uniform vec3 uColor, uSunColor, uLightDir, uLightColor, uAmbient, uRimColor;
-      uniform float uRim, uSun, uFogCap, uStrata, uFoot, uDesat, uBands;
+      uniform vec3 uColor, uSunColor, uLightColor, uRimColor;
+      uniform float uRim, uSun, uFogCap, uStrata, uFoot, uDesat, uBands, uSunPower;
+      ${KEY}
+      ${HEMI}
       ${FOG}
       varying vec3 vNormalW;
       varying vec3 vViewDir;
@@ -323,12 +516,17 @@ export function makeRockMaterial(env, {
       varying float vAngle;
       void main() {
         vec3 n = normalize(vNormalW);
-        float ndl = dot(n, normalize(uLightDir)) * 0.5 + 0.5;
+        float ndl = keyResponse(n);
         float ramp = mix(floor(ndl * 3.0) / 3.0, ndl, 0.35);
 
         // Rock is dark. It reads as rock because of what happens at its edges
         // and its bedding, not because the body is modelled.
-        vec3 col = uColor * (uAmbient + uLightColor * ramp * 0.85);
+        //
+        // No shadow lookup and no rim light out here, and both are deliberate:
+        // the shadow camera is fitted to the foreground island, and the rim is
+        // a light aimed at the cultivator. A range four hundred units away
+        // takes the sun and the sky and nothing else.
+        vec3 col = uColor * (hemisphere(n) + uLightColor * uSunPower * ramp * 0.85);
 
         // Bedding planes: horizontal steps, stronger low down where the strata
         // are thicker, and offset per instance so no two pillars share a seam.
@@ -991,8 +1189,40 @@ export function makeRuneRingMaterial(env) {
 /* --------------------------------------------------------------- post FX */
 
 /**
- * The whole frame, once: paper fibre, vignette, ink dissolve for rebirth, and
- * a global grade. One pass — anything more is a frame-rate tax on a phone.
+ * A colour that is already a pixel.
+ *
+ * Every other hex in this renderer describes light and is converted into the
+ * linear working space on the way in. The two the post pass mixes in after the
+ * curve describe the finished frame instead, so they take no conversion at
+ * all — `NoColorSpace` is how you say that to three.
+ */
+export function displayColor(hex) {
+  return new THREE.Color().setStyle(hex, THREE.NoColorSpace);
+}
+
+/**
+ * The last pass in the composer: tone map, then grade.
+ *
+ * ---------------------------------------------------------------------------
+ * Where the pipeline turns from light into pixels
+ *
+ * Everything upstream of here — the scene, and the bloom taken off it — is
+ * linear light with no ceiling: a lit summit and a spark of qi are allowed to
+ * be four and forty, because that is what makes a bloom threshold at 0.85 mean
+ * anything. Nothing has been clamped, and nothing may be, until this pass.
+ *
+ * So this is where exposure is applied, where ACES rolls the top end off into
+ * white instead of clipping it flat, and where the result is encoded to sRGB
+ * for the glass. `renderer.toneMapping` is set to ACESFilmic to say so out
+ * loud, but it drives no built-in material here — every material in this file
+ * writes gl_FragColor by hand — so the curve is written out below and the
+ * exposure is read off `renderer.toneMappingExposure` each frame, which keeps
+ * one dial for the time-of-day grade to turn.
+ *
+ * After that: paper, the tribulation darken, the vignette, the rebirth
+ * dissolve, the flash, and the QA grayscale. All of those are display-referred
+ * and all of them belong after the curve.
+ * ---------------------------------------------------------------------------
  */
 export function makePostMaterial() {
   return new THREE.ShaderMaterial({
@@ -1002,14 +1232,25 @@ export function makePostMaterial() {
       tDiffuse: { value: null },
       uTime: { value: 0 },
       uResolution: { value: new THREE.Vector2(1, 1) },
-      uGrain: { value: 0.055 },
-      uVignette: { value: 0.42 },
-      uContrast: { value: 0.30 },
+      /** Kept in step with renderer.toneMappingExposure by the view. */
+      uExposure: { value: 1 },
+      // Paper, not film: 2% is the ceiling the stage-1 post stack allows, and
+      // it was 5.5% when the frame had no tone curve to carry the texture.
+      uGrain: { value: 0.02 },
+      uVignette: { value: 0.35 },
+      // ACES has its own shoulder and toe now, so the hand S-curve that used to
+      // do all of that work is down to a light touch on the midtones.
+      uContrast: { value: 0.10 },
       uDissolve: { value: 0 },
       uDarken: { value: 0 },
       uFlash: { value: 0 },
-      uFlashColor: { value: new THREE.Color('#ffffff') },
-      uInk: { value: new THREE.Color('#0b0e12') },
+      // Display-referred, both of them: they are mixed in *after* the tone
+      // curve and the sRGB encode, so they are already the pixels they want to
+      // be. Everything else in the renderer is a colour management conversion
+      // away from linear light; these two must not be, or the rebirth ink and
+      // the tribulation flash come out at 40% of what they were painted.
+      uFlashColor: { value: displayColor('#ffffff') },
+      uInk: { value: displayColor('#0b0e12') },
       // Debug only, and off in every shipped frame: see setGrayscale().
       uGrayscale: { value: 0 },
     },
@@ -1025,11 +1266,17 @@ export function makePostMaterial() {
       uniform vec2 uResolution;
       uniform vec3 uInk, uFlashColor;
       uniform float uTime, uGrain, uVignette, uDissolve, uFlash, uDarken, uContrast, uGrayscale;
+      uniform float uExposure;
       ${NOISE}
+      ${ACES}
       varying vec2 vUv;
       void main() {
         vec3 col = texture2D(tDiffuse, vUv).rgb;
         vec2 px = vUv * uResolution;
+
+        // Scene-referred light in, display-referred colour out. Everything
+        // below this line is working on pixels, not on photons.
+        col = linearToSRGB(acesFilmic(col * uExposure));
 
         // The ink curve. A landscape built on a small number of well-separated
         // values needs those values to stay separated all the way to the glass;

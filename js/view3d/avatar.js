@@ -42,6 +42,23 @@ export function createAvatar(env, tier) {
   const body = new THREE.Group();
   group.add(body);
 
+  /**
+   * Every solid part of her casts into the sun's shadow map, and none of them
+   * receives.
+   *
+   * Casting is the whole point: the wedge of shade under the hem is what says
+   * she is sitting on the rock rather than pasted in front of it, and it is
+   * the single cheapest thing in this stage.
+   *
+   * Not receiving is the less obvious half. The shadow camera covers thirty
+   * world units at 1024 texels, so she is about sixty texels tall — enough to
+   * lay a clean shadow *on the shelf*, nowhere near enough to resolve her own
+   * folds, and asking it to try gives a figure crawling with acne. Her own
+   * form is carried by the toon ramp and the rim light, which is what they are
+   * for. Nothing here glows, so nothing here is a light either.
+   */
+  const solid = (mesh) => { mesh.castShadow = true; return mesh; };
+
   /* ------------------------------------------------------------ the body */
 
   const robeMat = makeInkMaterial(env, { color: '#6b6257', rim: 0.7, bands: 4 });
@@ -53,7 +70,7 @@ export function createAvatar(env, tier) {
   const lap = new THREE.Mesh(new THREE.SphereGeometry(0.62, 18, 12), robeMat);
   lap.scale.set(1.18, 0.5, 1.0);
   lap.position.y = 0.3;
-  body.add(lap);
+  body.add(solid(lap));
 
   // Robe: a lathe from hem to collar. The silhouette is the character.
   const profile = [
@@ -62,48 +79,48 @@ export function createAvatar(env, tier) {
     new THREE.Vector2(0.19, 1.14), new THREE.Vector2(0.001, 1.16),
   ];
   const robe = new THREE.Mesh(new THREE.LatheGeometry(profile, 20), robeMat);
-  body.add(robe);
+  body.add(solid(robe));
 
   const collar = new THREE.Mesh(new THREE.TorusGeometry(0.20, 0.035, 6, 18), trimMat);
   collar.rotation.x = Math.PI / 2;
   collar.position.y = 1.11;
-  body.add(collar);
+  body.add(solid(collar));
 
   const sash = new THREE.Mesh(new THREE.TorusGeometry(0.47, 0.045, 6, 22), trimMat);
   sash.rotation.x = Math.PI / 2;
   sash.position.y = 0.66;
-  body.add(sash);
+  body.add(solid(sash));
 
   const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.085, 0.10, 0.14, 8), skinMat);
   neck.position.y = 1.20;
-  body.add(neck);
+  body.add(solid(neck));
 
   const head = new THREE.Mesh(new THREE.SphereGeometry(0.205, 18, 14), skinMat);
   head.scale.set(0.92, 1.06, 0.94);
   head.position.y = 1.38;
-  body.add(head);
+  body.add(solid(head));
 
   // A cap that sits above the brow. A longer theta swallows the whole face and
   // the cultivator reads as a black ball.
   const hair = new THREE.Mesh(new THREE.SphereGeometry(0.213, 18, 10, 0, Math.PI * 2, 0, Math.PI * 0.40), hairMat);
   hair.position.y = 1.395;
-  body.add(hair);
+  body.add(solid(hair));
 
   const knot = new THREE.Mesh(new THREE.SphereGeometry(0.085, 10, 8), hairMat);
   knot.position.y = 1.60;
   knot.scale.set(1, 1.25, 1);
-  body.add(knot);
+  body.add(solid(knot));
 
   const pin = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.012, 0.34, 5), trimMat);
   pin.position.y = 1.60;
   pin.rotation.z = Math.PI / 2.5;
-  body.add(pin);
+  body.add(solid(pin));
 
   const beard = new THREE.Mesh(new THREE.ConeGeometry(0.10, 0.42, 7, 1), hairMat);
   beard.position.set(0, 1.10, 0.135);
   beard.rotation.x = Math.PI;
   beard.scale.set(1, 0.001, 0.7); // grown in by age
-  body.add(beard);
+  body.add(solid(beard));
 
   // Arms folded into a meditation mudra.
   for (const side of [-1, 1]) {
@@ -111,18 +128,18 @@ export function createAvatar(env, tier) {
     upper.position.set(side * 0.29, 0.86, 0.02);
     upper.rotation.z = side * 0.55;
     upper.rotation.x = -0.25;
-    body.add(upper);
+    body.add(solid(upper));
 
     const fore = new THREE.Mesh(new THREE.CapsuleGeometry(0.085, 0.30, 4, 8), robeMat);
     fore.position.set(side * 0.29, 0.60, 0.18);
     fore.rotation.z = side * 1.15;
     fore.rotation.x = -0.35;
-    body.add(fore);
+    body.add(solid(fore));
   }
   const hands = new THREE.Mesh(new THREE.SphereGeometry(0.13, 12, 10), skinMat);
   hands.scale.set(1.5, 0.55, 1.0);
   hands.position.set(0, 0.58, 0.24);
-  body.add(hands);
+  body.add(solid(hands));
 
   /* --------------------------------------------------------------- aura */
 

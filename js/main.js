@@ -225,10 +225,24 @@ requestAnimationFrame(frame);
 
 /* ------------------------------------------------------------------ PWA */
 
+// Never in a dev build. The worker is cache-first over the whole shell, so on
+// a machine that has played once it serves yesterday's modules to today's
+// page — and the contact sheet is then a picture of a build that no longer
+// exists. That is worse than having no instrument at all: it agrees with you.
+// A dev build unregisters any worker it finds, so opening ?debug=1 once is
+// enough to get out of a stale cache.
 if ('serviceWorker' in navigator) {
-  window.addEventListener('load', () => {
-    navigator.serviceWorker.register('./sw.js').catch(() => { /* offline play still works from cache */ });
-  });
+  if (DEBUG) {
+    navigator.serviceWorker.getRegistrations()
+      .then((rs) => Promise.all(rs.map((r) => r.unregister())))
+      .then(() => (typeof caches !== 'undefined' ? caches.keys() : []))
+      .then((keys) => Promise.all([...keys].map((k) => caches.delete(k))))
+      .catch(() => { /* nothing registered; nothing to do */ });
+  } else {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('./sw.js').catch(() => { /* offline play still works from cache */ });
+    });
+  }
 }
 
 // Handy for debugging in the field; harmless in production.
