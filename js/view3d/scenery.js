@@ -8,51 +8,18 @@ import * as THREE from 'three';
 import { mulberry32 } from '../rng.js';
 import {
   makeInkMaterial, makeCloudMaterial, makeFallMaterial, makeParticleMaterial,
-  makeGlowMaterial, makeGraniteMaterial, makeMistMaterial,
+  makeGraniteMaterial, makeMistMaterial, makeBlossomMaterial,
 } from './shaders.js';
 import { sceneryProgress } from './progress.js';
 import { placeAtDepth } from './framing.js';
-import { cragGeometry } from './rock.js';
 import { peakGeometry } from './peaks.js';
 import { PEAK_MESHES, peakPlacements } from './peak-plan.js';
+import { pineGeometry } from './trees.js';
+import { PLUM, plumSkeleton, framingBranch } from './plum-plan.js';
 
 /* ==================================================================== */
 /*  geometry                                                             */
 /* ==================================================================== */
-
-/** A pine in silhouette: a bare stem and three stacked skirts. Two draws' worth
- *  of shape in one, and the only thing in the frame that gives a peak a size. */
-function pineGeometry() {
-  const pos = [];
-  const idx = [];
-  const ring = (y, r, n) => {
-    const base = pos.length / 3;
-    for (let i = 0; i < n; i++) {
-      const a = (i / n) * Math.PI * 2;
-      pos.push(Math.cos(a) * r, y, Math.sin(a) * r);
-    }
-    return base;
-  };
-  // stem
-  const b0 = ring(0, 0.05, 4);
-  const b1 = ring(0.45, 0.035, 4);
-  for (let i = 0; i < 4; i++) {
-    const j = (i + 1) % 4;
-    idx.push(b0 + i, b1 + i, b0 + j, b0 + j, b1 + i, b1 + j);
-  }
-  // three skirts, each a shallow cone
-  for (const [y, r, h] of [[0.34, 0.42, 0.40], [0.58, 0.32, 0.36], [0.80, 0.20, 0.32]]) {
-    const base = ring(y, r, 6);
-    const tip = pos.length / 3;
-    pos.push(0, y + h, 0);
-    for (let i = 0; i < 6; i++) idx.push(base + i, tip, base + ((i + 1) % 6));
-  }
-  const g = new THREE.BufferGeometry();
-  g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pos), 3));
-  g.setIndex(idx);
-  g.computeVertexNormals();
-  return g;
-}
 
 /** A far bird: two swept triangles. At this distance a bird *is* its silhouette. */
 function birdGeometry() {
@@ -91,39 +58,42 @@ function craneGeometry() {
 }
 
 /**
- * Recursive plum branches, returned as instance transforms for a single tapered
- * segment. Plum is all angle and hesitation: short runs, hard turns, no
- * symmetry — the opposite of a pine.
+ * A skeleton — a list of `{ from, to, r0, r1 }` in plum-plan.js's plain-array
+ * form — turned into instance transforms for one tapered cylinder.
+ *
+ * The cylinder itself is built **tapered**, and that is not a nicety. Drawn at
+ * one radius per segment, a chain of them is a chain of pipes: every joint is a
+ * flat disc of the same diameter as the one before it, the ends are cut square,
+ * and the whole tree reads as scaffolding — which is exactly what the first
+ * pass of this looked like on the contact sheet. A fixed taper in the mesh
+ * costs nothing, keeps one draw call, and turns a pipe into a limb. The
+ * instance's radial scale is the segment's *base* radius; the tip comes out at
+ * `BRANCH_TAPER` of it, and a joint where the next base is slightly wider than
+ * the last tip is a knot, which is what old plum wood is made of.
  */
-function plumBranches(rand, { depth = 5, length = 2.4, thick = 0.16 } = {}) {
-  const out = [];
-  const tips = [];
+export const BRANCH_TAPER = 0.72;
+
+/** 0.55 in sRGB, expressed in the linear light the live palette carries. */
+const BARK_SINK = 0.55 ** 2.2;
+
+function branchInstances(segments, matrix = null) {
   const up = new THREE.Vector3(0, 1, 0);
-
-  function grow(from, dir, len, rad, level) {
-    const to = from.clone().addScaledVector(dir, len);
-    const q = new THREE.Quaternion().setFromUnitVectors(up, dir.clone().normalize());
-    const mid = from.clone().lerp(to, 0.5);
-    out.push({ pos: mid, quat: q, scale: new THREE.Vector3(rad, len, rad) });
-
-    if (level <= 0) { tips.push(to.clone()); return; }
-    // Two or three children, each thrown well off the parent's line.
-    const n = rand() < 0.32 ? 3 : 2;
-    for (let i = 0; i < n; i++) {
-      const axis = new THREE.Vector3(rand() - 0.5, rand() * 0.25, rand() - 0.5).normalize();
-      const bend = 0.45 + rand() * 0.62;
-      const child = dir.clone().applyAxisAngle(axis, bend).normalize();
-      // Plum reaches upward and sideways more than it droops.
-      child.y = Math.max(child.y, -0.12);
-      child.normalize();
-      grow(to, child, len * (0.60 + rand() * 0.18), rad * 0.66, level - 1);
-    }
-  }
-
-  const base = new THREE.Vector3(0, 0, 0);
-  const lean = new THREE.Vector3(0.28 + rand() * 0.2, 1, -0.12).normalize();
-  grow(base, lean, length, thick, depth);
-  return { segments: out, tips };
+  const from = new THREE.Vector3();
+  const to = new THREE.Vector3();
+  return segments.map((s) => {
+    from.fromArray(s.from);
+    to.fromArray(s.to);
+    if (matrix) { from.applyMatrix4(matrix); to.applyMatrix4(matrix); }
+    const dir = to.clone().sub(from);
+    const len = dir.length() || 1e-4;
+    const scale = matrix ? matrix.getMaxScaleOnAxis() : 1;
+    return {
+      pos: from.clone().lerp(to, 0.5),
+      quat: new THREE.Quaternion().setFromUnitVectors(up, dir.divideScalar(len)),
+      scale: new THREE.Vector3(s.r0 * scale, len, s.r0 * scale),
+      tip: to.clone(),
+    };
+  });
 }
 
 /* ==================================================================== */
@@ -306,65 +276,120 @@ export function createScenery(env, tier) {
     group.add(deck);
   }
 
-  /* ------------------------------------------------------- plum tree */
+  /* --------------------------------------- the plum, and the framing branch */
 
-  // Old wood: near-black, angular, and leaning out over the drop.
-  const barkMat = makeInkMaterial(env, { color: '#1b1519', rim: 0.30, bands: 2 });
-  const branchGeo = new THREE.CylinderGeometry(0.34, 0.62, 1, 5, 1);
-  const { segments, tips } = plumBranches(mulberry32(77), { depth: tier.plumDepth, length: 2.5, thick: 0.17 });
-
-  const branches = new THREE.InstancedMesh(branchGeo, barkMat, segments.length);
-  segments.forEach((s, i) => branches.setMatrixAt(i, tmpMat.compose(s.pos, s.quat, s.scale)));
-  branches.instanceMatrix.needsUpdate = true;
-
-  const plum = new THREE.Group();
-  plum.add(branches);
-  // Sized so the whole tree — including where it meets rock — sits between the
-  // HUD and the cultivate pad.
-  plum.position.set(-7.5, -5.0, -16.3);
-  plum.rotation.y = -0.5;
-  plum.scale.setScalar(1.15);
-  group.add(plum);
-
-  // A shelf of rock for it to stand on, so it does not hang in the haze.
+  // Old wood: near-black, angular, standing on the platform's back-left corner
+  // and leaning out over the drop.
   //
-  // This was a six-sided cone with its apex right where the trunk meets it, so
-  // the tree stood on the point of a pyramid — the most conspicuously artificial
-  // thing in the frame. A crag gives it a crown to grow out of and a broken wall
-  // that falls away below.
-  const ledgeMat = makeInkMaterial(env, { color: '#232a35', rim: 0.35, bands: 2, flat: true });
-  // Small: it is sixteen units from the camera, where a couple of world units
-  // is already a large piece of the frame. The crown sits just under the trunk
-  // and the mass falls away steeply out of the bottom of the picture.
-  const ledge = new THREE.Mesh(
-    cragGeometry({ seed: 512, sides: 10, rings: 6, taper: 0.66, jag: 0.34, drift: 0.34, crown: 0.05 }),
-    ledgeMat,
+  // ---------------------------------------------------------------------
+  // What this replaces, and why the replacement is not a better fractal
+  //
+  // The foreground tree was a recursive branch function — grow, throw two or
+  // three children at a randomised angle, recurse five deep — which is a
+  // perfectly good *deciduous* tree, and that was the fault. At the opening
+  // realm the progression puts the blossom count near zero, so what shipped in
+  // every first screenshot of this game was a bare self-similar fan of twigs: a
+  // European oak in February, standing in a Chinese mountain range. It could
+  // not be fixed by adding pink to the ends, because the silhouette was already
+  // saying something else.
+  //
+  // 梅 is a chain of decisions rather than a recursion, and plum-plan.js holds
+  // the drawing — four to six trunk lengths with a hard angular turn at every
+  // joint, three or four mains, two or three subs on each, and nothing below
+  // that.
+  //
+  // ---------------------------------------------------------------------
+  // One mesh, two trees
+  //
+  // The framing branch is the same wood, so it is the same instanced draw: both
+  // skeletons are baked into world space and concatenated. Which is also why
+  // neither of them sways. A group rotation on the tree would swing its wood
+  // and not its blossom — the blossom has to live in one world-space mesh
+  // shared with the branch, or it is a second draw call for forty flowers — and
+  // 0.012 radians of it was 0.4% of the frame anyway. The foreground's motion
+  // is the petals and the thread of smoke; the wood is old and does not move.
+  //
+  // rim 0.30 → 0.09, and it is the same fault the shelf had one stage earlier,
+  // arrived at from the other end. A fresnel term is only an *edge* on a
+  // silhouette, and on a cylinder most of the visible surface is near-grazing:
+  // `pow(1 - dot(n, v), 4)` runs high over the whole limb rather than at its
+  // outline. At 0.30 that was two thirds of the light on the framing branch,
+  // and no sun and no palette could touch it — the near-black device in the
+  // corner rendered as a pale grey pipe. It never showed on the old tree
+  // because that was sixteen units away and pencil-thin.
+  const barkMat = makeInkMaterial(env, { color: '#120e12', rim: 0.09, bands: 2 });
+  const branchGeo = new THREE.CylinderGeometry(BRANCH_TAPER, 1, 1, 5, 1);
+
+  const tree = plumSkeleton({ seed: 77, subs: tier.plumDepth >= 5 ? 3 : 2 });
+  const seat = new THREE.Matrix4().compose(
+    new THREE.Vector3(...PLUM.at),
+    new THREE.Quaternion().setFromEuler(new THREE.Euler(PLUM.tilt, PLUM.yaw, PLUM.lean, 'YXZ')),
+    new THREE.Vector3(PLUM.scale, PLUM.scale, PLUM.scale),
   );
-  ledge.position.set(-7.6, -5.15, -16.5);
-  ledge.scale.set(2.9, 9.0, 2.7);
-  ledge.rotation.y = 0.6;
-  group.add(ledge);
+  const frame = framingBranch();
+
+  const treeParts = branchInstances(tree.segments, seat);
+  const frameParts = branchInstances(frame.segments);
+  const parts = treeParts.concat(frameParts);
+
+  const branches = new THREE.InstancedMesh(branchGeo, barkMat, parts.length);
+  parts.forEach((s, i) => branches.setMatrixAt(i, tmpMat.compose(s.pos, s.quat, s.scale)));
+  branches.instanceMatrix.needsUpdate = true;
+  branches.castShadow = true;
+  branches.frustumCulled = false;
+  const plum = branches;
+  group.add(branches);
+
+  // Where the flowers go: the tree's tips in world space, and the framing
+  // branch's, interleaved so the two come into bloom together as the count
+  // climbs. One framing tip per three of the tree's, because the framing branch
+  // is three times closer to the lens — a flower on it is three times the
+  // flower on the tree, and evenly shared the corner would carry most of the
+  // blossom in the picture. It is a near-black device, not the subject.
+  const treeTips = tree.tips.map((t) => new THREE.Vector3(...t).applyMatrix4(seat));
+  const frameTips = frame.tips.map((t) => new THREE.Vector3(...t));
+  const tips = [];
+  treeTips.forEach((t, i) => {
+    tips.push(t);
+    if (i % 3 === 2 && frameTips.length) tips.push(frameTips[Math.floor(i / 3) % frameTips.length]);
+  });
 
   // Blossom: five tiny petals per flower is too much geometry at this count, so
-  // each is a flat disc that always faces up-ish and catches the rim light.
-  const blossomMat = makeGlowMaterial(env, { color: '#f6d3e0', power: 1.1, strength: 1.15, core: 0.9 });
+  // each is a small disc — but a *lit* one now. It used to be drawn with the
+  // glow material, which is a fresnel shell: brightest at the silhouette, empty
+  // in the middle, and on a disc facing anywhere near the camera it renders as
+  // a ring. Two hundred and sixty tiny rings is not blossom. See
+  // makeBlossomMaterial for the rest of the argument.
+  const blossomMat = makeBlossomMaterial(env, { color: '#f5d0dc', roughness: 0.7, emissive: 0.16 });
   const blossomGeo = new THREE.CircleGeometry(0.055, 5);
-  const blossomCount = Math.min(tier.blossoms, tips.length * 3);
+  const blossomCount = Math.min(tier.blossoms, tips.length * 26);
   const blossoms = new THREE.InstancedMesh(blossomGeo, blossomMat, blossomCount);
+  blossoms.frustumCulled = false;
   const brand = mulberry32(4242);
+  const nearWhite = new THREE.Color('#fff2f4');
+  const petalPink = new THREE.Color('#f5d0dc');
   for (let i = 0; i < blossomCount; i++) {
     const tip = tips[i % tips.length];
+    // Clustered, not scattered: 梅 flowers in knots on bare wood, so the spread
+    // around a tip is small and the gaps between tips are left empty. Wider for
+    // the flowers added late, so a tree coming into full bloom spreads out from
+    // its own tips rather than getting denser in the same place.
+    const spread = 0.16 + (i / blossomCount) * 0.26;
     tmpV.set(
-      tip.x + (brand() - 0.5) * 0.55,
-      tip.y + (brand() - 0.5) * 0.55,
-      tip.z + (brand() - 0.5) * 0.55,
+      tip.x + (brand() - 0.5) * spread,
+      tip.y + (brand() - 0.5) * spread,
+      tip.z + (brand() - 0.5) * spread,
     );
     tmpQ.setFromEuler(new THREE.Euler(brand() * 3, brand() * 3, brand() * 3));
-    const sc = 0.7 + brand() * 0.8;
+    const sc = 0.75 + brand() * 0.75;
     blossoms.setMatrixAt(i, tmpMat.compose(tmpV, tmpQ, tmpS.set(sc, sc, sc)));
+    // #f5d0dc through to near-white, per flower. A single pink at this size
+    // averages out to one flat tint; the spread is what gives a cluster depth.
+    blossoms.setColorAt(i, tmpColor.copy(petalPink).lerp(nearWhite, brand() * brand()));
   }
   blossoms.instanceMatrix.needsUpdate = true;
-  plum.add(blossoms);
+  if (blossoms.instanceColor) blossoms.instanceColor.needsUpdate = true;
+  group.add(blossoms);
 
   /* ------------------------------------------------------- petals */
 
@@ -548,8 +573,22 @@ export function createScenery(env, tier) {
     }
     pineMat.uniforms.uColor.value.set(ink[0]);
     birdMat.uniforms.uColor.value.set(ink[0]);
-    barkMat.uniforms.uColor.value.set(p.bark || '#1b1519');
-    blossomMat.uniforms.uColor.value.set(p.blossom || '#f6d3e0');
+    // Near-black, and taken further there than the palette asks.
+    //
+    // `bark` is authored per realm at around luminance 20, which sounds like
+    // near-black and is not, once a limb this close to the lens turns its lit
+    // face to the sun: on the contact sheet the framing branch came back at 90,
+    // level with the peaks it is standing in front of. BARK_SINK is the linear
+    // equivalent of taking it 45% toward black in sRGB — the same move
+    // `foregroundInk` makes on the platform, done as a multiply because what
+    // arrives here is the *live* palette, whose entries are already THREE
+    // colours in linear light rather than the hexes world.js is handed.
+    barkMat.uniforms.uColor.value.copy(p.bark || tmpColor.set('#1b1519')).multiplyScalar(BARK_SINK);
+    // A stock material, so it is `.color` and `.emissive` rather than a
+    // uniform — and both, or a realm's blossom changes hue while the light it
+    // gives off stays the last realm's.
+    blossomMat.color.set(p.blossom || '#f5d0dc');
+    blossomMat.emissive.set(p.blossom || '#f5d0dc');
     petalMat.uniforms.uColor.value.set(p.blossom || '#f6d3e0');
     craneMat.uniforms.uColor.value.set(p.crane || '#e6ecf2');
     for (const m of cloudMats) {
@@ -628,7 +667,10 @@ export function createScenery(env, tier) {
     for (const deck of cloudDecks) deck.position.y = deck.userData.baseY - smooth.cloudDrop;
 
     blossoms.count = Math.round(blossomCount * smooth.blossom);
-    blossomMat.uniforms.uStrength.value = 0.55 + smooth.blossom * 0.75;
+    // Full bloom catches the bloom pass; a tree in bud does not. The dial is
+    // the emissive term, which is the only part of this material that can push
+    // a flower over the composer's 0.85 threshold.
+    blossomMat.emissiveIntensity = 0.10 + smooth.blossom * 0.14;
     petalShown = Math.round(petalCount * prog.petalRate);
     petalGeo.setDrawRange(0, petalShown);
 
@@ -637,9 +679,13 @@ export function createScenery(env, tier) {
       const s = petalSeed[i];
       const life = ((t * (0.045 + s * 0.05) * wind) + s) % 1;
       const swirl = Math.sin(life * 9.0 + s * 12.0) * 1.6;
-      petalPos[i * 3 + 0] = -7.5 + swirl + (s - 0.5) * 6.0 - life * 4.0;
-      petalPos[i * 3 + 1] = 3.4 - life * 18.0;
-      petalPos[i * 3 + 2] = -16.3 + Math.cos(life * 7.0 + s * 9.0) * 2.2 + (s - 0.5) * 4.0;
+      // Off the crown of the tree, and over the rim behind it. The tree stands
+      // on the platform now, so a petal that fell straight down would land on
+      // the rock beside the cultivator and sit there; the drift carries them
+      // out past the edge, which is where the drop is.
+      petalPos[i * 3 + 0] = PLUM.at[0] + swirl + (s - 0.5) * 4.4 - life * 5.2;
+      petalPos[i * 3 + 1] = PLUM.at[1] + 6.4 - life * 20.0;
+      petalPos[i * 3 + 2] = PLUM.at[2] + Math.cos(life * 7.0 + s * 9.0) * 1.8 + (s - 0.5) * 3.2 - life * 2.6;
     }
     petalGeo.attributes.position.needsUpdate = true;
 
@@ -706,8 +752,6 @@ export function createScenery(env, tier) {
       fireflyMat.uniforms.uFade.value = 0.55 + Math.sin(t * 1.3) * 0.2;
     }
 
-    // The plum sways as one piece — the trunk is old and does not bend much.
-    plum.rotation.z = Math.sin(t * 0.32 * wind) * 0.012 * wind;
   }
 
   return { group, peaks, plum, cranes, petals, setPalette, sync, update, peakSets };

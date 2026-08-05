@@ -409,6 +409,7 @@ scheme, it is three clearly separated values:
 | **sky** | the middle | a gradient from a luminous skyline to a dark zenith |
 | **peaks** | ink | always darker than the sky behind them, stepping near-black to pale as they recede |
 | **ground** | the darkest thing out there after the island | the near shore is the closest land in the frame, so it takes the *nearest* rung of the ridge ramp. A rung lighter and it came out brighter than the range behind it, which is depth running backwards |
+| **the near band** | darker than all of them | the foreground island, the plum, the framing branch: the realm's ink taken most of the way to black. It is the end of the ladder that is nailed down, and the other three are read against it. Added in [Stage 5](#stage-5--the-foreground), where it was found to be *lighter* than the midground |
 
 The spires used to be tinted with the **ridge** ramp. Those colours are authored
 for valley walls seen against mist and deliberately run pale at the far end;
@@ -742,6 +743,176 @@ turn at it rather than wrapping, because a wrap teleports the fbm with the mesh.
 The one genuine pair of near-coplanar surfaces left is the tarn and its own bed,
 and that takes the small negative `polygonOffset` the brief asks for.
 
+### Stage 5 — the foreground
+
+Everything above is midground and distance. This stage is the band the player is
+actually sitting in, and it had three separate faults that all pulled the same
+way: the foreground was **lighter than the range behind it**, the two largest
+objects in the frame were **regular polygons**, and the tree in it was a
+**leafless European deciduous tree** standing in a Chinese mountain range.
+
+**The near band is the bottom of the value ladder, and it was the top of it.**
+The platform was painted with the realm's `ground`, a mid tone authored for the
+far shore. Measured on the grayscale sheet it came back at **82** against a
+midground of 67: the nearest rock in the picture, taking almost no air, lighter
+than ranges a hundred units behind it. `foregroundInk()` in `palette.js` is the
+fourth rung — the realm's own ink taken 56% toward black — and it is a rung the
+other three are *read against*. A value ladder is a relative structure, and a
+relative structure with nothing nailed down can float up together, which is
+exactly what "the picture looks washed out" means when nothing in particular is
+wrong.
+
+Two things fought that, and neither was in the palette:
+
+- **The rim term is additive; the albedo is not.** `rim` on the shelf had
+  already come down 0.25 → 0.08 in stage 1, and 0.08 reads as a trace right up
+  until the surface under it goes near-black. `pow(1 - dot(n, v), 4)` runs at
+  0.55 across a top seen from eight degrees above, so almost all the light on
+  the platform was a view-dependent wash no sun and no shadow could touch. It is
+  0.02 now, and the same fault took the framing branch — a limb close to the
+  lens is *mostly* near-grazing surface, so at `rim: 0.30` the near-black device
+  in the corner rendered as a pale grey pipe at luminance 90.
+- **Flat shading, or the relief does nothing.** The platform's top is nine large
+  triangles between the outline points, each tipped a different way. Smoothed,
+  they average into one even grey.
+
+Grayscale, after: foreground band **24 / 30 / 28 / 7** at dawn, day, sunset and
+night, against a midground of 62 / 98 / 75 / 30 and peaks at 76 / 133 / 97 / 24.
+
+**The platform is a drawing, not a primitive.** `platform-plan.js` holds eleven
+points — angles that do not divide the circle, radii that never repeat, and a
+third column that turned out to matter more than either.
+
+- **Radial irregularity is not enough at this camera.** The eye is 2.03 units
+  above a slab twenty-one across, so the rim is seen nearly edge-on: swinging a
+  radius by four world units, a third of the whole platform, moves that piece of
+  the silhouette by 1.4% of frame height. Half a unit of *height* at the same
+  place moves it by 2.5%. So each point carries a `lift`, faded to zero over the
+  middle where the composition contract puts the cultivator's feet at exactly
+  y = 0, and the visible edge now wanders 4.8% of frame height instead of 1.4%.
+- **The points are deliberately not evenly spread.** Only the arc from about
+  190° to 290° is ever on screen. Eleven points spread evenly put two of them in
+  there with a straight line between — a lively plan that renders as a smooth
+  curve. Six of the eleven live in the visible arc.
+- **`symmetryScore()` is the gate as a number.** The outline is resampled as
+  radius-against-angle and compared with itself under every rotation and every
+  reflection; the score is the closest any of them comes to matching. A regular
+  n-gon scores 0, an ellipse scores 0, the platform scores 0.057. The one subtle
+  part is that rotations under fifteen degrees are excluded: the profile is
+  piecewise linear over spans of twenty degrees, so a one-sample lag matches
+  almost anything and the naive minimum over all lags is always ~0.
+- **The chipping has to be a pure function of position.** `ExtrudeGeometry` is
+  not indexed, so a vertex on a shared edge is stored two or three times. Jitter
+  drawn from a counter gives the copies different answers and the cap tears open
+  into confetti. Same rule the peaks are carved under.
+
+**Nothing below the rim and beyond it can be seen.** This is measured, and it
+threw out the first two designs for the steps. The eye is two units above a rim
+at y = 0, so the platform's own mass occludes every point past its edge that
+lies under it — a flight descending off the back is *completely invisible*,
+however carefully it is placed. And a flight laid across the top is nearly as
+bad: the visible top spans v 0.55 … 0.60, five percent of the frame, with
+everything past radius four crammed into the top two percent of that. Six treads
+out there came to about twelve pixels in total, dark rock on dark rock.
+
+What reads at this camera is a break in a **silhouette**. The steps sit just
+inside the rim, standing half a unit proud, so each tread notches the platform's
+own skyline and is seen against the cloud sea rather than against the rock. They
+sink as they go right until the last is level with the rim and half off the edge
+of the picture. Their bases are flared: a prism with vertical sides is a crate,
+and six crates along a skyline read as cargo.
+
+**The plum.** The old tree was a recursive branch function — grow, throw two or
+three children at a randomised angle, recurse five deep. That is a perfectly
+good *deciduous* tree, and that was the fault: a self-similar fan of thinning
+twigs is an oak in February, and no amount of pink at the ends fixes a
+silhouette already saying something else. Worse, the progression's blossom floor
+was 0.06, which put nine flowers on a thirty-seven-segment tree — so what
+shipped in every opening screenshot was a bare one. A progression cue may run
+from a little to a lot; it may not run from wrong subject to right subject. The
+floor is 0.34.
+
+梅 is a chain of decisions rather than a recursion, and `plum-plan.js` is the
+drawing: five trunk lengths with a 40°–55° turn at every joint (under fifteen
+and the chain reads as one bent pole, and the segment boundaries become a
+subdivision artefact instead of the point of the shape), four mains, two or
+three subs each, and nothing below that. Radii fall by a third per joint, so the
+ends read as twigs. Four fat root stubs splay out of the foot — that is the crag
+mesh the old tree needed under it, deleted.
+
+The tree also *moved*. It stood on its own ledge at z = −16, sixteen units back
+and below the rim, which meant the platform occluded its entire trunk and the
+player saw a scribble of twigs floating over the drop. It stands on the
+platform's back-left shoulder now, roots on rock.
+
+Blossom is a lit `MeshStandardMaterial` at roughness 0.7 with a small emissive
+term, not the fresnel shell it used to be. A glow material is brightest at the
+silhouette and empty in the middle, so a disc facing anywhere near the camera
+renders as a **ring** — two hundred and sixty tiny rings is not blossom, it is
+noise. The emissive term has one job: push the brightest clusters over the
+composer's 0.85 bloom threshold so they flare against near-black wood. Flowers
+run `#f5d0dc` to near-white per instance, because a single pink at this size
+averages out to one flat tint.
+
+**The framing branch is the largest single thing this stage does for depth**,
+and the reason is worth stating plainly: the frame gets an object it can see is
+in front of everything, at a depth the eye can name, and every other plane is
+then read against it. A range with nothing between it and the viewer has no
+scale but its own.
+
+It is authored as **frame-space waypoints**, like the ridges and the ranks, and
+the `z` on each one runs *positive*. That is the whole trick and it took four
+rounds to find: written in world coordinates it was retuned repeatedly and still
+covered nine percent of the frame, because a limb hanging two and a half units
+at a depth of six moves eight percent down the picture and no amount of length
+changes that. The eye stands at z = 12.2, so a root at z = +4.2 is eight units
+from the lens where a world unit is a *ninth* of the frame's height against a
+twentieth out at the tree. The branch is not big, it is close — which is also
+the only way it can do its job. It covers 18.9% of the frame, enters at u = 1.42
+and v = −0.22 so its root is off the corner, and reaches down to v = 0.41, just
+above the horizon.
+
+Two shape faults on the way there, both visible only on the contact sheet:
+
+- **A chain of untapered cylinders is scaffolding.** Every joint is a flat disc
+  the same diameter as the last and the ends are cut square. The mesh is a
+  tapered cylinder now — one draw call either way.
+- **Droppers that hang straight down are a gantry.** Three near-parallel
+  vertical bars of even width, and the shape of a gantry does not care how
+  carefully its members are tapered. Every segment moves 0.07–0.09 across the
+  frame as well as down it with the sign alternating, so each limb zigzags at
+  about forty-five degrees, and four thin twigs go back the other way. Fine wood
+  going the wrong way is the thing no piece of machinery has.
+
+The tree and the branch are **one instanced mesh** — both skeletons are baked
+into world space and concatenated — and their blossom is one more. Which is also
+why neither sways: a group rotation would swing the wood and not the flowers,
+since the flowers have to live in a single world-space mesh shared with the
+branch. It was 0.012 radians, 0.4% of the frame. The foreground's motion is the
+petals and the thread of smoke; the wood is old and does not move.
+
+**The censer** is the one object in the picture somebody carried up the
+mountain. Everything else is geology or weather, and the cultivator alone does
+not settle it — she could be passing through. Three legs, a swelling body, a
+flat rim and two upright ears is what says 鼎 rather than "pot" at forty pixels.
+Its smoke is a strip, not a particle stream: motes read as sparks, and incense
+in still air is a *continuous* thread that only breaks up near the top. The sway
+is in the vertex shader, scaled by `uv.y²` so the base stays pinned — smoke that
+wags at the bottom is a flag — and the alpha scrolls upward through the noise
+field, which is the whole animation.
+
+**The conifers were firs.** Five stacked `ConeGeometry` skirts is a Christmas
+card, and these two trees are the only man-height objects in the midground,
+which makes them the scale cue for the entire landform: the eye sizes the
+mountain behind whatever it decides they are. 松 is a bare leaning stem carrying
+three or four **horizontal plates** with sky between them, and the sky between
+them is most of the shape. `trees.js`, one instanced draw for the stand instead
+of two.
+
+Draw calls went 87 → 88 for four new objects, because the platform is welded to
+its skirt and the treads to the censer: two meshes sharing a material are still
+two draw calls.
+
 ### Composing in frame space
 
 The camera is authored and fixed, so the frame — not the world — is the thing
@@ -807,7 +978,7 @@ dials, so it is testable without a browser:
 |---|---|
 | How many peaks stand out of the cloud | realm (9 of 14 → all 14) |
 | How far the cloud sea has sunk | realm |
-| Plum in bud / full bloom / shedding | stage within the realm |
+| Plum in bud / full bloom / shedding | stage within the realm — never *bare*; see [Stage 5](#stage-5--the-foreground) |
 | Petal fall rate | stage — heaviest at Peak, when a breakthrough is due |
 | Cranes on the thermals | jianghu renown |
 | Bamboo by the shelf | sect herb garden level |
@@ -945,7 +1116,7 @@ This is a phone game that will sit open for hours.
 
 | Budget | Target | Measured (this build) |
 |---|---|---|
-| Draw calls | < 90 | **87** at medium tier, of which **7** are all of stage 4's rock: six instanced peak meshes and one ground |
+| Draw calls | < 90 | **88** at medium tier, of which **7** are all of stage 4's rock (six instanced peak meshes and one ground) and **4** are stage 5's foreground: island, dressing, wood, blossom |
 | Total download | < 8 MB | **~1035 KB**, of which Three.js is 677 KB |
 | Downloaded art assets | prefer zero | **zero** — all geometry and shading is procedural |
 | Frame rate | 60 fps mid-range Android, 30 fps floor | quality tiers + watchdog (below) |
@@ -1035,7 +1206,7 @@ A18 pacing table.
 npm run sim          # idle pacing
 npm run sim:active   # sustained tapping
 npm run balance      # assert the A18 table, exit 1 on drift
-npm test             # 331 engine and renderer checks
+npm test             # 481 engine and renderer checks
 ```
 
 `--check` runs both modes across several seeds and fails if any milestone leaves

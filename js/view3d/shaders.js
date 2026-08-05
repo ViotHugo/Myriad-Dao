@@ -286,8 +286,18 @@ function litUniforms(env, extra = {}) {
  */
 export function makeInkMaterial(env, {
   color = '#5a6472', rim = 0.55, bands = null, emissive = 0, flat = false,
-  transparent = false, opacity = 1, fogCap = 1,
+  transparent = false, opacity = 1, fogCap = 1, tint = false,
 } = {}) {
+  // `tint` reads a per-vertex albedo multiplier off an `aTint` attribute — the
+  // foreground platform bakes "darker underneath, lighter on top" into its
+  // geometry with it (see applyTint in rock.js). It is opt-in per material and
+  // not a uniform default because a mesh *without* the attribute would get zero
+  // from the attribute stream and render pure black; only geometry that carries
+  // aTint may be handed a material built with this on.
+  const TINT_VERT = tint ? 'attribute float aTint; varying float vTint;' : '';
+  const TINT_READ = tint ? 'vTint = aTint;' : '';
+  const TINT_FRAG = tint ? 'varying float vTint;' : '';
+  const ALBEDO = tint ? 'uColor * vTint' : 'uColor';
   return new THREE.ShaderMaterial({
     // Required for the renderer to upload the shadow map and its matrix; see
     // litUniforms() and SHADOW_PARS_FRAG.
@@ -304,6 +314,7 @@ export function makeInkMaterial(env, {
     flatShading: flat,
     vertexShader: /* glsl */ `
       ${SHADOW_PARS_VERT}
+      ${TINT_VERT}
       varying vec3 vNormalW;
       varying vec3 vViewDir;
       varying float vDepth;
@@ -311,6 +322,7 @@ export function makeInkMaterial(env, {
       varying float vWorldY;
       void main() {
         ${INSTANCE_VERT}
+        ${TINT_READ}
         vLocal = localPos.xyz;
         vec4 world = modelMatrix * localPos;
         vWorldY = world.y;
@@ -330,12 +342,14 @@ export function makeInkMaterial(env, {
       ${KEY}
       ${HEMI}
       ${FOG}
+      ${TINT_FRAG}
       varying vec3 vNormalW;
       varying vec3 vViewDir;
       varying float vDepth;
       varying vec3 vLocal;
       varying float vWorldY;
       void main() {
+        vec3 albedo = ${ALBEDO};
         vec3 n = normalize(vNormalW);
         vec3 v = normalize(vViewDir);
         float ndl = keyResponse(n);
@@ -346,7 +360,7 @@ export function makeInkMaterial(env, {
         // The sun, and what the shelf takes out of it. The shadow multiplies
         // the key only — an occluded surface still sees the sky, which is what
         // keeps a contact shadow reading as shade rather than as a hole.
-        vec3 col = uColor * (hemisphere(n) + uLightColor * uSunPower * ramp * sunShadow());
+        vec3 col = albedo * (hemisphere(n) + uLightColor * uSunPower * ramp * sunShadow());
 
         // The edges.
         //
@@ -374,7 +388,7 @@ export function makeInkMaterial(env, {
         // above now carries the separation, and two full-strength rims stacked
         // on one silhouette is a glow.
         col += uRimColor * fres * uRim * 0.5;
-        col += uColor * uEmissive;
+        col += albedo * uEmissive;
 
         col = applyFogCapped(col, vDepth, uFogCap, vWorldY);
         col = mix(col, vec3(dot(col, ${LUMA3})), uDesat);
@@ -545,6 +559,159 @@ export function makeGraniteMaterial(env, {
   // stops a granite material sharing a program with an unpatched standard one.
   mat.customProgramCacheKey = () => 'granite';
   return mat;
+}
+
+/* --------------------------------------------------------------- blossom */
+
+/**
+ * 梅花: the only warm thing in the foreground, and the one place in the picture
+ * where the value ladder is deliberately jumped.
+ *
+ * A lit material rather than a fresnel shell, and that is the whole point of
+ * it. The blossom used to be drawn with `makeGlowMaterial`, which is brightest
+ * at the silhouette and empty in the middle — right for an aura, wrong for a
+ * flower, and on a five-sided disc facing anywhere near the camera it renders
+ * as a *ring*. Two hundred and sixty tiny rings is not blossom, it is noise.
+ * This is a real surface at roughness 0.7 taking the real sun, so a cluster
+ * turned toward the light is near-white and one in the tree's own shade is
+ * dusty pink, which is what makes the tree read as having depth in it.
+ *
+ * The emissive term is small and is there for one specific job: to push the
+ * brightest clusters over the bloom threshold (0.85) so they *flare* slightly
+ * against a near-black branch. It is not there to make them glow — a blossom
+ * that emits its own light at midnight is a lantern.
+ *
+ * The three flags every stock material in this renderer needs, for the reasons
+ * makeGraniteMaterial spells out: `fog: false` (the capped air is applied by
+ * hand, from the one `env` the whole scene reads), `toneMapped: false` (the
+ * composer applies ACES once, at the end), and the gain of π that undoes
+ * `BRDF_Lambert`'s divisor so this sits on the same ladder as the ink.
+ */
+export function makeBlossomMaterial(env, {
+  color = '#f5d0dc', roughness = 0.7, emissive = 0.16, fogCap = 0.14, gain = Math.PI,
+} = {}) {
+  const mat = new THREE.MeshStandardMaterial({
+    color: new THREE.Color(color),
+    emissive: new THREE.Color(color),
+    emissiveIntensity: emissive,
+    roughness,
+    metalness: 0,
+    flatShading: true,
+    side: THREE.DoubleSide,
+    transparent: false,
+    opacity: 1,
+    fog: false,
+    toneMapped: false,
+  });
+
+  const uniforms = {
+    uFogColor: env.uFogColor,
+    uFogHigh: env.uFogHigh,
+    uFogDensity: env.uFogDensity,
+    uDesat: env.uDesat,
+    uFogCap: { value: fogCap },
+    uGain: { value: gain },
+  };
+  mat.userData.uniforms = uniforms;
+
+  mat.onBeforeCompile = (shader) => {
+    Object.assign(shader.uniforms, uniforms);
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', /* glsl */ `
+        #include <common>
+        varying float vBlossomY;
+      `)
+      .replace('#include <project_vertex>', /* glsl */ `
+        #include <project_vertex>
+        vec4 blossomWorld = vec4(transformed, 1.0);
+        #ifdef USE_INSTANCING
+          blossomWorld = instanceMatrix * blossomWorld;
+        #endif
+        vBlossomY = (modelMatrix * blossomWorld).y;
+      `);
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', /* glsl */ `
+        #include <common>
+        uniform float uFogCap, uGain, uDesat;
+        ${FOG}
+        varying float vBlossomY;
+      `)
+      .replace('#include <opaque_fragment>', /* glsl */ `
+        #ifdef OPAQUE
+          diffuseColor.a = 1.0;
+        #endif
+        {
+          vec3 lit = outgoingLight * uGain;
+          lit = applyFogCapped(lit, vViewPosition.z, uFogCap, vBlossomY);
+          lit = mix(lit, vec3(dot(lit, ${LUMA3})), uDesat);
+          gl_FragColor = vec4(lit, diffuseColor.a);
+        }
+      `);
+  };
+  mat.customProgramCacheKey = () => 'blossom';
+  return mat;
+}
+
+/* ----------------------------------------------------------------- smoke */
+
+/**
+ * A thread of incense smoke: one strip, swayed in the vertex shader.
+ *
+ * Everything about it is written against `uv.y`, which runs 0 at the burner to
+ * 1 at the top. The sway is scaled by `uv.y²` so the base is pinned to the
+ * censer — smoke that wags at the bottom reads as a flag, not as a rising
+ * thread — and the alpha scrolls *upward* through the noise field, which is
+ * the whole animation: the ribbon does not move, the pattern in it does, and
+ * that is what rising looks like.
+ *
+ * It is the one bright thing in a near-black band, so it is deliberately thin
+ * and deliberately short of opaque: at full strength a white bar in front of a
+ * black platform is a scratch on the lens.
+ */
+export function makeSmokeMaterial(env, {
+  color = '#e8eef4', opacity = 0.17, sway = 0.85, lean = [-0.5, 0.3],
+} = {}) {
+  return new THREE.ShaderMaterial({
+    transparent: true,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+    uniforms: envUniforms(env, {
+      uColor: { value: new THREE.Color(color) },
+      uOpacity: { value: opacity },
+      uSway: { value: sway },
+      uLean: { value: new THREE.Vector2(lean[0], lean[1]) },
+      uWind: { value: 1 },
+    }),
+    vertexShader: /* glsl */ `
+      uniform float uTime, uSway, uWind;
+      uniform vec2 uLean;
+      varying vec2 vUv;
+      void main() {
+        vUv = uv;
+        vec3 p = position;
+        float k = uv.y * uv.y;
+        p.x += uLean.x * uv.y + sin(uv.y * 3.1 + uTime * 0.62 * uWind) * k * uSway;
+        p.z += uLean.y * uv.y + cos(uv.y * 2.3 - uTime * 0.47 * uWind) * k * uSway * 0.7;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(p, 1.0);
+      }
+    `,
+    fragmentShader: /* glsl */ `
+      uniform vec3 uColor;
+      uniform float uOpacity, uTime, uDesat, uWind;
+      ${NOISE}
+      varying vec2 vUv;
+      void main() {
+        // Scrolling down the field is rising up the ribbon.
+        float n = fbm(vec2(vUv.x * 2.0, vUv.y * 4.0 - uTime * 0.30 * uWind));
+        // Thin and continuous low down, breaking up as it climbs.
+        float body = mix(0.85, n * 1.5, smoothstep(0.15, 0.95, vUv.y));
+        float ends = smoothstep(0.0, 0.10, vUv.y) * smoothstep(1.0, 0.55, vUv.y);
+        float sides = smoothstep(0.0, 0.34, vUv.x) * smoothstep(1.0, 0.66, vUv.x);
+        vec3 col = mix(uColor, vec3(dot(uColor, ${LUMA3})), uDesat);
+        gl_FragColor = vec4(col, clamp(body, 0.0, 1.0) * ends * sides * uOpacity);
+      }
+    `,
+  });
 }
 
 /* ------------------------------------------------------------------- sky */
