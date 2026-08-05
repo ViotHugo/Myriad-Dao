@@ -9,6 +9,7 @@ import { placeAtDepth } from './framing.js';
 import { cragGeometry, stoneGeometry } from './rock.js';
 import { AURORA_COLOR } from './palette.js';
 import { sunDirection } from './time-of-day.js';
+import { createCloudSea } from './cloud-sea.js';
 import {
   makeSkyMaterial, makeRidgeMaterial, makeInkMaterial, makeWaterMaterial,
   makeMistMaterial,
@@ -391,6 +392,16 @@ export function createWorld(env, tier, lighting) {
   }
   group.add(mist);
 
+  /* the sea of cloud ---------------------------------------------------- */
+  //
+  // Four horizontal layers filling the valley between the foreground island and
+  // the ranks, drawn after the ridges so their feet drown in it. The mist bands
+  // above are what the *air* does; this is what the air is standing on. See
+  // cloud-sea.js for where the surface sits and why it is not where the brief
+  // put it.
+  const cloudSea = createCloudSea(env, tier);
+  group.add(cloudSea.group);
+
   /* ------------------------------------------ the day, and the realm in it */
   //
   // Two inputs, one authority each:
@@ -407,6 +418,10 @@ export function createWorld(env, tier, lighting) {
     zenith: new THREE.Color(), horizon: new THREE.Color(), below: new THREE.Color(),
     ambient: new THREE.Color(), ground: new THREE.Color(), inkRim: new THREE.Color(),
     waterTop: new THREE.Color(), waterTint: new THREE.Color(),
+    // The realm's two cloud values, eased here like everything else. The sea
+    // reads them from `cur`, never from the palette directly, so a realm change
+    // fades the cloud instead of cutting it.
+    cloud: new THREE.Color(), cloudCrest: new THREE.Color(),
     ridges: LAYERS.map(() => new THREE.Color()),
     density: 0.018,
     dir: new THREE.Vector3(0.4, 0.1, 0.55).normalize(),
@@ -439,6 +454,8 @@ export function createWorld(env, tier, lighting) {
     to(cur.ground, p.ground);
     to(cur.inkRim, p.aura);
     to(cur.waterTint, p.water);
+    to(cur.cloud, p.cloud);
+    to(cur.cloudCrest, p.cloudCrest);
     // Water holds the sky: bright toward the far bank where it carries the
     // skyline, darker in the near water where it carries the upper sky. Both
     // are the sky's own colours, or the river reads as a differently-coloured
@@ -485,6 +502,12 @@ export function createWorld(env, tier, lighting) {
     // where the light is coming from.
     lighting.apply(cur);
 
+    // After the rig, never before: the sea takes its sun colour and its sun
+    // direction off the same `env` uniforms lighting.apply() has just written,
+    // so there is no frame in which the cloud is lit from one place and the
+    // rock from another.
+    cloudSea.apply(cur.cloud, cur.cloudCrest);
+
     groundMat.uniforms.uColor.value.copy(cur.ground);
     for (const { mat, layer } of ridgeMats) mat.uniforms.uColor.value.copy(cur.ridges[layer]);
     if (waterMat) {
@@ -499,7 +522,7 @@ export function createWorld(env, tier, lighting) {
     skyMat.uniforms.uStorm.value = amount;
   }
 
-  function update(dt, t) {
+  function update(dt, t, reduced = false) {
     // Mist bands drift laterally and wrap, so nothing ever visibly loops.
     mist.children.forEach((b, i) => {
       b.position.x += dt * (0.35 + i * 0.12) * (i % 2 ? -1 : 1);
@@ -507,10 +530,11 @@ export function createWorld(env, tier, lighting) {
       if (b.position.x > limit) b.position.x = -limit;
       if (b.position.x < -limit) b.position.x = limit;
     });
+    cloudSea.update(dt, reduced);
   }
 
   return {
-    group, sky, skyMat, fog, water, ridges, pine, mist,
+    group, sky, skyMat, fog, water, ridges, pine, mist, cloudSea,
     applyPalette, setStorm, update,
     /** The resolved day: what the exposure and bloom dials should be showing. */
     atmosphere: cur,

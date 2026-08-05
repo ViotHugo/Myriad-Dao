@@ -521,6 +521,98 @@ draw call, and the eye finds a moving speck before it finds anything else. The
 cranes are the ceremony; the skein is the ordinary traffic of a valley that
 somebody lives in.
 
+### Stage 3 — the sea of cloud in the valley
+
+The standing decks above put cloud around the *feet of the ranks*. Everything
+below the skyline — the whole strip between the meditation shelf and the first
+range — was air, and it read as a dark hole under a bright picture. That strip
+is now four horizontal, independently scrolling cloud layers: `cloud-plan.js`
+(pure: the tile and the seat) and `cloud-sea.js` (the Three.js half).
+
+**A horizontal surface at this camera is foreshortened five to one, and that
+decides the whole design.** The horizon is at v = 0.45 and the UI owns the
+bottom 30%, so the sea is seen between zero and about eleven degrees of
+depression. Three consequences, each of which killed an attempt at this stage
+before it was measured:
+
+- **Round billows cannot survive it.** At 100 units a 50-unit puff is wider than
+  the frame and 1.5% of its height. What survives is a *ribbon* — long across
+  the sightline, short along it — so the alpha map is sampled anisotropically,
+  a 55–90 unit period across the view against 22–36 along it. The sea is banks
+  rather than billows, which is what 横云 is in every painting of this subject.
+- **The scroll has to run across the sightline too.** Written the obvious way
+  the drift is spent on the axis the perspective compresses, and the sea reads
+  as a still. The layers are rotated a quarter turn off the camera's bearing so
+  that the brief's `offset.x` is the axis a cloud visibly moves along.
+- **Relief is the one cue the grazing angle does not compress.** 2.6 units of
+  swell is 3.4% of frame height at the sea's own depth, against the 1% a whole
+  ribbon of alpha gets, so the surface is displaced by a periodic noise field
+  and shaded by its own height. It is what makes one layer *cross* another
+  rather than lie beside it.
+
+**Where the stack sits is solved from the frame, not authored.** `SEAT` names
+where the lowest layer's surface should break (v = 0.585, at 64 units) and what
+one rung of the stack is worth in frame height (2.6%); the four world heights
+fall out of that, and retuning the camera moves the sea with it. The layers land
+at y = −8.5 … −2.4 against an eye at y = 2.03.
+
+**Two faults here are invisible in code and total on screen**, and both are now
+asserted:
+
+- **The painter's stack runs furthest-first.** These planes write no depth.
+  Ordered nearest-first — which is how the list reads — the palest, highest,
+  furthest layer composites last and paints over the three in front of it, and
+  four layers collapse into one flat sheet in the top layer's colour.
+- **Stacked alphas converge on their mean.** At half coverage a layer, four
+  layers come out at 0.77 *everywhere* with the tile's structure cancelled
+  statistically — an even pale plate produced by the very thing that was
+  supposed to give it depth. At 0.36 the gaps stay open and the dark valley
+  behind them is what the cloud is read against.
+
+The tile is 256², generated from a seed in about 70 ms at boot and shared by
+every layer and every scene rebuild. It is **seamless by construction** — every
+octave wraps its own lattice, the worley cells wrap with it, and the domain warp
+is periodic too — because it is repeated across a 400-unit plane, where a
+discontinuity is a ruled grid over the entire sea. `tests/run.js` asserts the
+periodicity directly, f(u + 1, v) = f(u, v), rather than trusting a dump of it.
+
+Worley is the *erosion*, not the body: inverted worley as the mass is a bubble
+raft and the eye finds the cell lattice in about a second, warped or not. The
+body is five octaves of value noise; worley lifts the threshold along its own
+boundaries so the mass tears where a billow ends.
+
+**What the numbers say.** Hiding the sea and reshooting isolates it exactly. In
+the band it occupies (v 0.50–0.5625) row-mean luminance goes 52 → 121 at dawn,
+80 → 146 by day, 62 → 130 at sunset, 24 → 91 at night, and the horizontal
+structure in that band — its row standard deviation — goes 21 → 60, 31 → 62,
+22 → 62, 14 → 61. Every other band of the frame is unchanged to the level:
+nothing is veiled, no summit is touched. Whole-frame local contrast (mean
+|Laplacian|) is up 16% at all four times of day.
+
+**Where the brief's own numbers went.** Stage 3 was specified as four planes at
+y = 2.0, 2.6, 3.2, 3.8. The eye stands at y = 2.0251, so those are one plane
+25 mm below it and three above — and a plane above the eye is seen from below
+and converges on the horizon from the *top* of the frame, which is an overcast
+lid drawn over every summit with the brightest rung of the value ladder laid
+over the darkest. The 0.6 spacing goes the same way: one rung is 0.8% of frame
+height at the middle of this sea, four pixels on a phone, so four layers 0.6
+apart are one sheet drawn four times. Both facts are asserted against the real
+projection maths in `tests/run.js`, so the reason the numbers moved is checked
+rather than remembered. Everything else the brief specifies is exactly as
+written: four layers, a 400 × 400 plane each, `MeshBasicMaterial` with a tiling
+noise `alphaMap` under 512², `transparent`, `depthWrite: false`, `DoubleSide`,
+an independent scroll per layer with a drift and a heading of its own, a tint
+toward the sun on the sun-facing side, and the whole thing drawn after the
+opaque world.
+
+Two flags on that material are load-bearing and silent if wrong. `toneMapped:
+false`, because the composer applies the ACES curve at the end and a stock
+material would apply it again in its own fragment shader. `fog: false`, because
+exp² fog is total by 400 units and would take the far half of the sea to exactly
+the sky colour; the haze is applied per vertex instead, capped at 0.30, from the
+same `env.uFogColor` and `env.uFogDensity` every other material reads. One air,
+still.
+
 ### Composing in frame space
 
 The camera is authored and fixed, so the frame — not the world — is the thing

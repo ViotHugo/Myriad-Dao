@@ -26,6 +26,10 @@ import {
 } from '../js/view3d/time-of-day.js';
 import { CAMERA } from '../js/view3d/camera-config.js';
 import {
+  TILE, cloudAlpha, cloudTile, LAYERS, PLANE, SCROLL, SEAT, SWELL, VIEW_UV,
+  ACROSS_UV, seatHeights, swellAt,
+} from '../js/view3d/cloud-plan.js';
+import {
   FRAMINGS, REFERENCE_ASPECT, cameraBasis, frameOf, placeAtDepth, unitsPerFrame,
   horizonV, composition, contactSheetPlan, sunOffsetDeg,
 } from '../js/view3d/framing.js';
@@ -2311,6 +2315,295 @@ section('Stage 2 — the sky sphere');
     // every 11 degrees across the one surface with nothing else on it.
     /vRay = world\.xyz - cameraPosition/.test(sky) && !/vDir = normalize\(position\)/.test(sky)
   ))());
+}
+
+section('Stage 3 — the tile the sea is made of');
+{
+  // A seam is silent in every unit test ever written and a ruled grid over the
+  // whole sea on screen, so the periodicity is asserted directly rather than
+  // inferred from the tile looking fine in a dump of it.
+  const samples = [];
+  for (let i = 0; i < 64; i++) samples.push([(i * 0.1237) % 1, (i * 0.0791) % 1]);
+
+  check('the tile is inside the texture budget, and a power of two',
+    TILE <= 512 && (TILE & (TILE - 1)) === 0, `${TILE}²`);
+
+  check('the field is periodic in u — no vertical seam', (() => {
+    let worst = 0;
+    for (const [u, v] of samples) {
+      worst = Math.max(worst, Math.abs(cloudAlpha(u, v) - cloudAlpha(u + 1, v)));
+      worst = Math.max(worst, Math.abs(cloudAlpha(u, v) - cloudAlpha(u - 3, v)));
+    }
+    return worst < 1e-9;
+  })());
+
+  check('the field is periodic in v — no horizontal seam', (() => {
+    let worst = 0;
+    for (const [u, v] of samples) {
+      worst = Math.max(worst, Math.abs(cloudAlpha(u, v) - cloudAlpha(u, v + 1)));
+      worst = Math.max(worst, Math.abs(cloudAlpha(u, v) - cloudAlpha(u, v - 2)));
+    }
+    return worst < 1e-9;
+  })());
+
+  check('the swell is periodic too, so the surface meets itself', (() => {
+    let worst = 0;
+    for (const [u, v] of samples) {
+      worst = Math.max(worst, Math.abs(swellAt(u, v, 17) - swellAt(u + 1, v, 17)));
+      worst = Math.max(worst, Math.abs(swellAt(u, v, 17) - swellAt(u, v + 1, 17)));
+    }
+    return worst < 1e-9 && SWELL.amplitude > 0;
+  })());
+
+  check('it is cloud, not a wash: open gaps, solid bodies, and coverage near a third', (() => {
+    // Four layers of it are composited, and stacked alphas converge on their
+    // mean: at half coverage a layer the union comes out even everywhere and
+    // the structure cancels statistically. This is the number that stops that.
+    const tile = cloudTile({ size: 64, seed: 3, cells: 8, coverage: 0.36 });
+    let sum = 0, clear = 0, solid = 0;
+    const n = tile.length / 4;
+    for (let i = 1; i < tile.length; i += 4) {
+      sum += tile[i];
+      if (tile[i] < 12) clear++;
+      if (tile[i] > 243) solid++;
+    }
+    const mean = sum / n / 255;
+    return mean > 0.24 && mean < 0.48 && clear / n > 0.10 && solid / n > 0.02;
+  })());
+
+  check('every channel carries it, because alphaMap reads the green one', (() => {
+    // A single-channel texture hands three a zero here: an entirely invisible
+    // sea, from a tile that is correct in every dump of it.
+    const tile = cloudTile({ size: 8 });
+    for (let i = 0; i < tile.length; i += 4) {
+      if (tile[i] !== tile[i + 1] || tile[i + 1] !== tile[i + 2]) return false;
+    }
+    return true;
+  })());
+
+  check('it is deterministic — the same seed is the same tile', (() => {
+    const a = cloudTile({ size: 16, seed: 5 });
+    const b = cloudTile({ size: 16, seed: 5 });
+    const c = cloudTile({ size: 16, seed: 6 });
+    return a.every((x, i) => x === b[i]) && !a.every((x, i) => x === c[i]);
+  })());
+}
+
+section('Stage 3 — where the sea sits, against the locked camera');
+{
+  const framing = FRAMINGS.world;
+  const basis = cameraBasis(framing);
+  const eyeY = basis.pos[1];
+  const horizon = horizonV(framing);
+  const heights = seatHeights();
+
+  // A point on a horizontal plane at height `h`, `d` units out along the
+  // camera's own bearing — and where it lands in the frame. The real
+  // projection, not an approximation of it: this is the whole argument.
+  const fwd = Math.hypot(basis.z[0], basis.z[2]);
+  const seaV = (h, d) => frameOf([
+    basis.pos[0] - (basis.z[0] / fwd) * d, h, basis.pos[2] - (basis.z[2] / fwd) * d,
+  ], { framing }).v;
+
+  /** The depth the middle of the sea is seen at. */
+  const MID = 110;
+
+  check('the brief\'s own heights would be a ceiling at this camera', (() => {
+    // y = 2.0, 2.6, 3.2, 3.8 against an eye at 2.0251: the first is 25 mm under
+    // it and the other three are over it. A plane above the eye is seen from
+    // below and converges on the horizon from the top of the frame — an
+    // overcast lid over every summit, with the brightest rung of the value
+    // ladder laid over the darkest.
+    const brief = [2.0, 2.6, 3.2, 3.8];
+    return eyeY - brief[0] > 0 && eyeY - brief[0] < 0.05
+      && brief.slice(1).every((y) => y > eyeY);
+  })(), `eye at y ${eyeY.toFixed(4)}`);
+
+  check('and the lowest of them would be two pixels tall', (() => {
+    // Its entire extent, from the near plane to four hundred units out, lands
+    // inside a sliver under the horizon.
+    const nearest = seaV(2.0, CAMERA.near);
+    const furthest = seaV(2.0, PLANE / 2);
+    return nearest - horizon < 0.07 && furthest - horizon < 0.001;
+  })());
+
+  check('the brief\'s 0.6 spacing is under 1% of the frame; this stack is over 2%', (() => {
+    const brief = Math.abs(seaV(2.0, MID) - seaV(2.6, MID));
+    const ours = Math.abs(seaV(heights[0], MID) - seaV(heights[1], MID));
+    return brief < 0.01 && ours > 0.02;
+  })(), `brief ${(Math.abs(seaV(2.0, MID) - seaV(2.6, MID)) * 100).toFixed(2)}%`);
+
+  check('every layer hangs below the eye', heights.every((h) => h < eyeY - 1),
+    heights.map((h) => h.toFixed(2)).join(' '));
+
+  check('they stack in frame order, and far enough apart to be seen apart', (() => {
+    const vs = heights.map((h) => seaV(h, MID));
+    for (let i = 1; i < vs.length; i++) {
+      if (!(vs[i] < vs[i - 1] - 0.02)) return false;   // higher layer, higher in frame
+    }
+    return true;
+  })());
+
+  check('the sea never crosses the skyline', (() => {
+    // Everything below the eye projects below the horizon at every depth, which
+    // is what keeps the brightest rung out of the sky and off the summits.
+    for (const h of heights) {
+      for (const d of [30, 60, 110, 198, 400, 4000]) {
+        if (seaV(h, d) <= horizon) return false;
+      }
+    }
+    return true;
+  })());
+
+  check('the whole sea lands in the strip the player can actually see', (() => {
+    // Between the skyline and the band the UI owns. A horizontal surface has
+    // only that strip to occupy at this tilt: higher and it is in the sky where
+    // the ranks are, lower and it is behind the shelf.
+    const floor = 1 - CAMERA.safeZone.bottom + 0.02;
+    const nearShore = seaV(heights[0], LAYERS[0].near[1]);
+    const farEdge = seaV(heights[heights.length - 1], LAYERS[LAYERS.length - 1].far[1]);
+    return SEAT.v > horizon + 0.1 && SEAT.v < floor
+      && nearShore < floor && farEdge > horizon + 0.02;
+  })(), `shore ${seaV(heights[0], LAYERS[0].near[1]).toFixed(3)}`);
+
+  check('the banks are staggered, so four layers are four distances', (() => {
+    for (let i = 1; i < LAYERS.length; i++) {
+      if (!(LAYERS[i].near[0] > LAYERS[i - 1].near[0] + 15)) return false;
+      if (!(LAYERS[i].near[1] > LAYERS[i].near[0])) return false;
+    }
+    return true;
+  })());
+
+  check('the sea fades out before its own rectangle does', (() => (
+    // A 400-unit square centred on the eye reaches 200 units in the worst
+    // direction. Anything still opaque at that radius draws a straight edge
+    // across the frame the first time the player swings the camera.
+    LAYERS.every((L) => L.far[1] <= PLANE / 2 - 1 && L.far[0] < L.far[1])
+  ))());
+
+  check('and it starts beyond the foreground island', LAYERS.every((L) => L.near[0] >= 30));
+}
+
+section('Stage 3 — the sea as it is drawn');
+{
+  const src = readFileSync(new URL('../js/view3d/cloud-sea.js', import.meta.url), 'utf8');
+  const world = readFileSync(new URL('../js/view3d/world.js', import.meta.url), 'utf8');
+
+  check('the build is the brief\'s: basic material, alpha map, both sides, no depth write',
+    /new THREE\.MeshBasicMaterial\(/.test(src) && /alphaMap: map/.test(src)
+    && /transparent: true/.test(src) && /depthWrite: false/.test(src)
+    && /side: THREE\.DoubleSide/.test(src)
+    && /new THREE\.PlaneGeometry\(PLANE, PLANE/.test(src) && PLANE === 400);
+
+  check('it opts out of the tone curve the post pass already applies', (() => (
+    // A stock material applies the renderer's ACES curve in its own fragment
+    // shader. The composer applies it again at the end. Twice is milk.
+    /toneMapped: false/.test(src)
+  ))());
+
+  check('it opts out of scene.fog and hazes by hand instead', (() => (
+    // exp² fog is total by 400 units: switched on, the far half of a surface
+    // drawn to the horizon *is* the horizon colour, and the sea stops existing.
+    /fog: false/.test(src) && /uFogColor/.test(src) && /uFogDensity/.test(src)
+  ))());
+
+  check('it takes its light from the rig, not from a second opinion', (() => (
+    // env.uLightDir and env.uLightColor are what lighting.js writes and what
+    // every ink shader reads, so the cloud and the rock cannot disagree about
+    // where the sun is.
+    /env\.uLightDir\.value/.test(src) && /env\.uLightColor\.value/.test(src)
+    && !/new THREE\.Vector3\(0\.4/.test(src)
+  ))());
+
+  check('the world paints it after the light rig, never before',
+    world.indexOf('lighting.apply(cur)') < world.indexOf('cloudSea.apply('));
+
+  check('the alpha map is anisotropic, short axis along the sightline',
+    LAYERS.every((L) => L.repeat[1] > L.repeat[0] * 2),
+    LAYERS.map((L) => L.repeat.join(':')).join(' '));
+
+  check('the across-view axis really is across the view', (() => {
+    // Re-derived from the framing rather than trusted: the plane's local +x is
+    // world +x and its uv.y runs against world z, so the camera's bearing in uv
+    // is atan2(-z.z … ). If the camera moves and this constant does not, the
+    // whole anisotropy is pointing the wrong way and the sea reads as still.
+    const b = cameraBasis(FRAMINGS.world);
+    const viewUv = Math.atan2(-b.z[2] * -1, -b.z[0]);   // (dx, -dz) of the view
+    const dot = Math.cos(ACROSS_UV) * Math.cos(viewUv) + Math.sin(ACROSS_UV) * Math.sin(viewUv);
+    return Math.abs(viewUv - VIEW_UV) < 0.02 && Math.abs(dot) < 0.03;
+  })());
+
+  check('the painter\'s stack goes furthest first', (() => {
+    // These write no depth. Ordered nearest-first — which is how the list reads
+    // — the palest, furthest layer composites last and paints over the three in
+    // front of it, and the sea collapses to one flat sheet.
+    for (let i = 1; i < LAYERS.length; i++) {
+      if (!(LAYERS[i].order < LAYERS[i - 1].order)) return false;
+    }
+    return true;
+  })());
+
+  check('it sits between the ridge strips and the near mist in that stack', (() => (
+    // Above the ridges and the standing decks (-6 … -17), so it drowns their
+    // feet; below the near mist band (-4), so the air still lies over it. No
+    // ties: a tie hands the order to a distance sort that can flip.
+    LAYERS.every((L) => L.order > -6 && L.order < -4)
+    && new Set(LAYERS.map((L) => L.order)).size === LAYERS.length
+  ))());
+
+  check('the near layer leads the parallax, and the drift stays calm', (() => {
+    // World units per second, which is what the brief's 0.0015 reads as: that
+    // fraction of the 400-unit plane. The nearest layer is the fastest — the
+    // index ramp taken as written runs the furthest one quickest, which is
+    // parallax backwards — and even it takes most of a minute to cross.
+    const n = LAYERS.length;
+    const speed = (i) => SCROLL * ((n - i) / 2) * PLANE;
+    for (let i = 1; i < n; i++) if (!(speed(i) < speed(i - 1))) return false;
+    return speed(0) > 0.3 && speed(0) < 1.5;
+  })(), `${(SCROLL * (LAYERS.length / 2) * PLANE).toFixed(2)} units/s on the near layer`);
+
+  check('every layer drifts on its own heading', (() => (
+    new Set(LAYERS.map((L) => L.heading)).size === LAYERS.length
+    && new Set(LAYERS.map((L) => L.rotation)).size === LAYERS.length
+    // …and mostly across the view, or the scroll is spent on the compressed axis
+    && LAYERS.every((L) => Math.abs(Math.sin(L.heading)) < 0.5)
+  ))());
+
+  check('the sun tint is a trace, and it is the sun\'s colour', (() => {
+    const tint = Number(/const SUN_TINT = ([\d.]+)/.exec(src)?.[1]);
+    return tint > 0 && tint <= 0.3;
+  })());
+
+  check('the haze is capped well short of the air', (() => {
+    // Cloud that has reached the air colour is not the top rung of the ladder
+    // any more, it is the middle one.
+    const cap = Number(/const HAZE_CAP = ([\d.]+)/.exec(src)?.[1]);
+    return cap > 0 && cap <= 0.35;
+  })());
+
+  check('the tile is generated once per session, not once per scene rebuild', (() => (
+    // A quality change rebuilds the whole world. Seventy milliseconds of noise
+    // per rebuild is a stutter the player would read as the game hanging.
+    /let tileData = null/.test(src) && /if \(!tileData\)/.test(src)
+  ))());
+
+  check('every tier asks for a number of layers that exists',
+    Object.values(TIERS).every((t) => Number.isInteger(t.cloudLayers)
+      && t.cloudLayers >= 0 && t.cloudLayers <= LAYERS.length)
+    && TIERS.low.cloudLayers <= TIERS.medium.cloudLayers
+    && TIERS.medium.cloudLayers <= TIERS.high.cloudLayers
+    && TIERS.high.cloudLayers === LAYERS.length);
+
+  check('a tier change rebuilds the scene rather than leaving the old stack up', (() => {
+    const index = readFileSync(new URL('../js/view3d/index.js', import.meta.url), 'utf8');
+    return /'cloudLayers'/.test(index)
+      && index.indexOf("'cloudLayers'") > index.indexOf('const GEOMETRY_KEYS');
+  })());
+
+  check('both new modules are in the service worker shell', (() => {
+    const sw = readFileSync(new URL('../sw.js', import.meta.url), 'utf8');
+    return sw.includes("'./js/view3d/cloud-sea.js'") && sw.includes("'./js/view3d/cloud-plan.js'");
+  })());
 }
 
 section('Camera lock — the harness ships to nobody');
