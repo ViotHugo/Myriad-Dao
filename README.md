@@ -10,7 +10,7 @@ framework, no downloaded art. **~1035 KB total**, and installable as a PWA.
 
 ```bash
 npm run serve     # http://localhost:8123
-npm test          # 311 checks
+npm test          # 392 checks
 npm run balance   # assert the A18 pacing table
 npm run sheet     # 4 cameras × 4 skies -> screenshots/contact-sheet.png
 ```
@@ -35,6 +35,14 @@ tree buds and blooms and sheds with the stage you are on, cranes gather as your
 name spreads, a skein of birds crosses the range, and a waterfall widens with
 your sect's mine. The landscape is a readout — how many peaks stand clear of the
 cloud is your realm, and you can read it without looking at a single number.
+
+Below the skyline the valley is a sea of cloud in its own right: four horizontal
+layers at four heights, each scrolling on its own heading, each rolling on its
+own swell. They are banks rather than billows on purpose — a horizontal surface
+seen from a level camera is foreshortened five to one, and a round puff drawn on
+it comes back as a smear — so the alpha map is stretched along the sightline and
+the layers cross each other as they drift. It is the difference between peaks
+standing in fog and peaks standing in weather.
 
 The whole picture is built on one relationship: cloud is the brightest thing in
 the frame, the peaks are ink and always darker than the sky behind them, and the
@@ -76,11 +84,12 @@ js/audio.js              synthesised WebAudio
 js/view3d/               Three.js: shaders, world, scenery, avatar, sect, effects
 js/view3d/camera-config.js   the locked camera — one object, no scattered literals
 js/view3d/time-of-day.js dawn, day, sunset, night — the sky, the air and the light
+js/view3d/cloud-plan.js  the sea of cloud as arithmetic: its tile, and where it sits
 js/view3d/debug.js       the QA harness. Dev-only, dynamically imported, never shipped
 tools/contact-sheet.js   drives a headless browser to shoot the 16-frame sheet
 tools/balance-sim.js     plays the engine headlessly, checks pacing
 tools/make-icons.js      regenerates the PWA icons
-tests/run.js             358 checks
+tests/run.js             392 checks
 docs/DESIGN.md           art direction, performance budget, quality tiers, balance
 ```
 

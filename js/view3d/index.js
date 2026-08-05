@@ -319,13 +319,20 @@ export function createView({ canvas, onTap, onDoubleTap, settings, debug = false
   let capturing = false;
   let fps = 60;
 
-  /** Free every geometry and material under a group before dropping it. */
+  /** Free every geometry, material and texture under a group before dropping it. */
   function disposeGroup(root) {
     root.traverse((o) => {
       if (o.geometry) o.geometry.dispose();
       const m = o.material;
-      if (Array.isArray(m)) m.forEach((x) => x.dispose());
-      else if (m) m.dispose();
+      const mats = Array.isArray(m) ? m : (m ? [m] : []);
+      for (const mat of mats) {
+        // Disposing a material does not dispose its textures, and the only
+        // textures in this renderer are the cloud sea's four alpha maps — a
+        // megabyte of GPU memory per rebuild, and the watchdog can rebuild more
+        // than once. The tile itself is cached in cloud-sea.js and survives.
+        for (const slot of ['map', 'alphaMap']) if (mat[slot]) mat[slot].dispose();
+        mat.dispose();
+      }
     });
     scene.remove(root);
   }
@@ -333,8 +340,8 @@ export function createView({ canvas, onTap, onDoubleTap, settings, debug = false
   // Counts that are baked into geometry at construction time. Changing any of
   // them means the scene has to be rebuilt, not just re-sized.
   const GEOMETRY_KEYS = ['mistBands', 'ridgeLayers', 'qiMotes', 'sparks', 'disciples', 'floatSwords',
-    'water', 'stars', 'spires', 'cloudDecks', 'plumDepth', 'blossoms', 'petals', 'cranes',
-    'waterfall', 'bamboo', 'fireflies'];
+    'water', 'stars', 'spires', 'cloudDecks', 'cloudLayers', 'plumDepth', 'blossoms', 'petals',
+    'cranes', 'waterfall', 'bamboo', 'fireflies'];
 
   function rebuildScene() {
     for (const g of [world.group, avatar.group, sect.group, scenery.group, effects.group]) disposeGroup(g);
@@ -406,7 +413,7 @@ export function createView({ canvas, onTap, onDoubleTap, settings, debug = false
     }
 
     rig.update(dt);
-    world.update(dt, clock);
+    world.update(dt, clock, reduced);
     avatar.update(dt, clock, reduced);
     sect.update(dt, clock);
     scenery.update(dt, clock, reduced);

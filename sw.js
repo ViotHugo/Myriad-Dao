@@ -4,7 +4,7 @@
 // cache-first strategy is both correct and the fastest possible boot. Bump
 // CACHE when shipping.
 
-const CACHE = 'myriad-dao-v0.10.0';
+const CACHE = 'myriad-dao-v0.11.0';
 
 const SHELL = [
   './',
@@ -35,6 +35,8 @@ const SHELL = [
   './js/view3d/time-of-day.js',
   './js/view3d/quality.js',
   './js/view3d/world.js',
+  './js/view3d/cloud-sea.js',
+  './js/view3d/cloud-plan.js',
   './js/view3d/avatar.js',
   './js/view3d/sect.js',
   './js/view3d/scenery.js',

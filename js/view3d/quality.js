@@ -43,6 +43,7 @@ export const TIERS = {
     // scenery
     spires: 26,
     cloudDecks: 2,
+    cloudLayers: 2,
     plumDepth: 4,
     blossoms: 60,
     petals: 26,
@@ -68,6 +69,7 @@ export const TIERS = {
     floatSwords: 4,
     spires: 58,
     cloudDecks: 3,
+    cloudLayers: 3,
     plumDepth: 5,
     blossoms: 150,
     petals: 60,
@@ -93,6 +95,7 @@ export const TIERS = {
     floatSwords: 6,
     spires: 96,
     cloudDecks: 3,
+    cloudLayers: 4,
     plumDepth: 5,
     blossoms: 260,
     petals: 110,
