@@ -6,13 +6,14 @@
 import * as THREE from 'three';
 import { mulberry32 } from '../rng.js';
 import { placeAtDepth } from './framing.js';
-import { cragGeometry, stoneGeometry } from './rock.js';
+import { stoneGeometry } from './rock.js';
 import { AURORA_COLOR } from './palette.js';
 import { sunDirection } from './time-of-day.js';
 import { createCloudSea } from './cloud-sea.js';
+import { TERRAIN, TARN, terrainField, terrainHeight } from './terrain-plan.js';
 import {
   makeSkyMaterial, makeRidgeMaterial, makeInkMaterial, makeWaterMaterial,
-  makeMistMaterial,
+  makeMistMaterial, makeGraniteMaterial,
 } from './shaders.js';
 
 /* ------------------------------------------------------------ CPU noise */
@@ -272,13 +273,13 @@ export function createWorld(env, tier, lighting) {
   // the whole picture read backwards.
   const trunkMat = makeInkMaterial(env, { color: '#141922', rim: 0.16, bands: 2, fogCap: 0.22 });
   const needleMat = makeInkMaterial(env, { color: '#18232a', rim: 0.20, bands: 2, flat: true, fogCap: 0.22 });
-  const spurMat = makeInkMaterial(env, { color: '#151b24', rim: 0.14, bands: 2, flat: true, fogCap: 0.18 });
 
   // Pines as two instanced draws rather than six meshes per tree: at two trees
-  // that was twelve draw calls for scenery the player barely registers.
+  // that was twelve draw calls for scenery the player barely registers. Only
+  // x, z and a scale here — the ground below decides the height, further down.
   const PINES = [
-    [-38, -4.6, -64, 1.2],
-    [-49, -5.6, -78, 1.0],
+    [-96, 0, -112, 0.95],
+    [-70, 0, -104, 0.78],
   ];
   const TIERS_PER_PINE = 5;
   const pineTrunks = new THREE.InstancedMesh(
@@ -287,13 +288,77 @@ export function createWorld(env, tier, lighting) {
   const pineNeedles = new THREE.InstancedMesh(
     new THREE.ConeGeometry(1, 0.85, 6, 1), needleMat, PINES.length * TIERS_PER_PINE,
   );
+
+  // The midground. Two pines on the near slope of the far shore, which is the
+  // one place in the frame where something man-height can be seen against the
+  // sky: they are the scale cue for the whole landform, the way the pavilion is
+  // the scale cue for the host peak.
+  //
+  // They used to stand on two crag meshes floating in the haze, because there
+  // was no ground for them to stand on. There is now, so each pine is seated by
+  // *asking the ground how high it is* rather than by a hand-tuned y — and it
+  // cannot come adrift the next time the section is retuned. Two draw calls
+  // saved, and the spur that was a separate rock is part of the landform it was
+  // pretending to be.
+  const midground = new THREE.Group();
+  midground.add(pineTrunks, pineNeedles);
+  const pine = pineTrunks;
+  group.add(midground);
+
+  /* the ground -------------------------------------------------------- */
+  //
+  // A subdivided plane displaced by low-frequency noise — the valley floor, the
+  // hollow the tarn sits in, and the far shore whose crest is the skyline of
+  // the land.
+  //
+  // What it replaces was a flat plane, and flat was not the fault on its own:
+  // the fault is what a flat horizontal surface does at this camera. The eye is
+  // at most 11° above it, so its far half is compressed into a couple of
+  // percent of frame height and *every* gradient on it — including the fade
+  // that was supposed to end it softly — collapses into one ruled horizontal
+  // line across the picture. That was the razor-straight ground/sky seam, and
+  // it could not be softened, because it was the projection flattening the
+  // softness and not the shader failing to provide it.
+  //
+  // Relief is the only cue a grazing angle does not compress. The crest at
+  // z = -110 stands between v 0.403 and 0.441 across the frame, and the cloud
+  // sea's own far edge lands at 0.472 — so the ruled line is not softened, it
+  // is *behind a ridgeline*. terrain-plan.js holds the section, and the suite
+  // checks that margin at every column, in front as well as above: land behind
+  // the sea's fade would be seen through the gap rather than covering it.
+  const field = terrainField();
+  const groundGeo = new THREE.PlaneGeometry(
+    TERRAIN.width, TERRAIN.depth, TERRAIN.segX, TERRAIN.segZ,
+  );
+  // Lying down, and facing up: a plane rotated -90° about x keeps its winding,
+  // so the ground's front faces are the ones the sky can see. (Rotated +90° it
+  // is inside-out, back-face culled to nothing, and the valley is a hole.)
+  groundGeo.rotateX(-Math.PI / 2);
+  {
+    const pos = groundGeo.attributes.position;
+    for (let i = 0; i < pos.count; i++) {
+      const x = pos.getX(i) + TERRAIN.centre[0];
+      const z = pos.getZ(i) + TERRAIN.centre[1];
+      pos.setXYZ(i, x, terrainHeight(x, z, field), z);
+    }
+    pos.needsUpdate = true;
+  }
+  groundGeo.computeVertexNormals();
+  const terrainMat = makeGraniteMaterial(env, { color: '#242b35', fogCap: 0.18, sunEdge: 0.08, gain: 0.95 });
+  const terrain = new THREE.Mesh(groundGeo, terrainMat);
+  terrain.frustumCulled = false;
+  group.add(terrain);
+
+  // Seat the pines on it. The two entries in PINES carry x, z and a scale; the
+  // height is the ground's to answer.
   {
     const m = new THREE.Matrix4();
     const q = new THREE.Quaternion();
     const v = new THREE.Vector3();
     const sc = new THREE.Vector3();
     const prand = mulberry32(6421);
-    PINES.forEach(([px, py, pz, ps], p) => {
+    PINES.forEach(([px, , pz, ps], p) => {
+      const py = terrainHeight(px, pz, field);
       const yaw = prand() * Math.PI * 2;
       v.set(px, py + 2.3 * ps, pz);
       q.setFromEuler(new THREE.Euler(0, yaw, 0.16, 'YXZ'));
@@ -311,50 +376,31 @@ export function createWorld(env, tier, lighting) {
     pineNeedles.instanceMatrix.needsUpdate = true;
   }
 
-  // The midground. The authored camera is yawed, so the band of the frame
-  // between the shelf and the first range looks out at roughly world x -26,
-  // z -40 — which was empty sky in every realm. A stand of pines and a rock
-  // spur out there gives the eye something to cross on the way up, and gives
-  // the mist something to wrap around.
-  // Far enough back to stay small, and set low so the canopies only just break
-  // the mist line — a few strokes, not a forest. The plum and the karst range
-  // carry the middle distance now; a third pine only crowded them.
-  const midground = new THREE.Group();
-  const mrand = mulberry32(6421);
-  midground.add(pineTrunks, pineNeedles);
-  const pine = pineTrunks;
-  // A shoulder of rock for them to stand on, mostly drowned in the haze.
-  // Crags, not cones: a six-sided cone at this size is unmistakably a pyramid.
-  for (const [x, y, z, r, h] of [[-39, -11.5, -66, 9, 12], [-52, -14, -80, 11, 13]]) {
-    const spur = new THREE.Mesh(
-      cragGeometry({ seed: 200 + r, sides: 9, rings: 5, taper: 0.36, jag: 0.36, drift: 0.26 }),
-      spurMat,
-    );
-    spur.position.set(x, y, z);
-    spur.scale.set(r, h, r * 0.9);
-    spur.rotation.y = mrand() * Math.PI;
-    midground.add(spur);
-  }
-  group.add(midground);
-
   /* water ------------------------------------------------------------- */
-  // A river in the valley floor, not a sea.
+  // A tarn, in a hollow the ground actually has.
   //
-  // This was a 900 x 320 plane at z = -175, and a horizontal plane that big,
-  // seen from above, has its far edge converge on the horizon: it reached
-  // v = 0.34 in the frame and painted over the entire cloud sea and both far
-  // ranks — an untextured slab across the middle of every composition. (Its
-  // ripple noise is scaled in world units, so at that distance it averages out
-  // to nothing, which is why it read as flat paint rather than as water.) Cut
-  // to the valley floor, it lands at v 0.51..0.79, under the mist, where a
-  // river belongs — and it is still the water the sect framing looks down on.
+  // The plane is still a plane — water is flat — but it is no longer the thing
+  // that decides where the valley ends. It sits four units off the bed of a
+  // closed hollow, so every edge of it is under a rim and there is no rectangle
+  // to find. What is left is the one genuine case of two near-coplanar surfaces
+  // in the scene, and near-coplanar surfaces a couple of hundred units out are
+  // z-fighting waiting to happen: a small negative polygon offset pulls the
+  // water toward the eye by far less than the hollow is deep and far more than
+  // the depth buffer can resolve out there. That is the whole of the fix and it
+  // costs nothing.
   let water = null;
   let waterMat = null;
   if (tier.water) {
     waterMat = makeWaterMaterial(env);
-    water = new THREE.Mesh(new THREE.PlaneGeometry(320, 130, 1, 1), waterMat);
+    waterMat.polygonOffset = true;
+    waterMat.polygonOffsetFactor = -2;
+    waterMat.polygonOffsetUnits = -4;
+    // Inside the hollow's own radii, so the sheet stops before the rim does.
+    water = new THREE.Mesh(
+      new THREE.PlaneGeometry(TARN.rx * 1.72, TARN.rz * 1.72, 1, 1), waterMat,
+    );
     water.rotation.x = -Math.PI / 2;
-    water.position.set(-60, -31, -105);
+    water.position.set(TARN.x, TARN.surface, TARN.z);
     water.renderOrder = -5;
     group.add(water);
   }
@@ -380,11 +426,31 @@ export function createWorld(env, tier, lighting) {
     const bottom = placeAtDepth(0.5, M.bottom, M.z);
     const left = placeAtDepth(0, M.top, M.z);
     const right = placeAtDepth(1, M.top, M.z);
+    const frameWidth = Math.abs(right[0] - left[0]);
+    // Four times the frame it is seen through, not twice.
+    //
+    // These bands drift, and the drift used to wrap at ±(90 + 22i) world units
+    // against a band 2.2 frames wide — which at z = -50 is a band 56 units
+    // across sliding 180 units. Its own edge therefore crossed the picture,
+    // and what the player saw was a soft-cornered white rectangle travelling
+    // through the frame: the floating polygon sliver the sunset build was
+    // failing on. It is not a z-fighting artefact and no depth offset could
+    // have touched it — it is a plane, drawn where it was told, big enough to
+    // see the end of.
+    //
+    // The limit below is derived from the band rather than authored: half its
+    // own width, less the 14% each side that makeMistMaterial fades out, less
+    // the frame it has to keep covered with the camera swung to either end of
+    // its arc. Whatever the depth, the edge stays outside the picture.
+    const width = frameWidth * 4;
     const band = new THREE.Mesh(
-      new THREE.PlaneGeometry(Math.abs(right[0] - left[0]) * 2.2, top[1] - bottom[1], 28, 2), mat,
+      new THREE.PlaneGeometry(width, top[1] - bottom[1], 28, 2), mat,
     );
+    band.userData.homeX = top[0] + (i % 2 ? -1 : 1) * (5 + t * 22);
+    band.userData.drift = Math.max(0, width * 0.5 - width * 0.14 - frameWidth * 0.68);
+    band.userData.dir = i % 2 ? -1 : 1;
     // Offset alternately so three bands never line up into one slab.
-    band.position.set(top[0] + (i % 2 ? -1 : 1) * (5 + t * 22), (top[1] + bottom[1]) / 2, M.z);
+    band.position.set(band.userData.homeX, (top[1] + bottom[1]) / 2, M.z);
     // The nearest ridge is at z = -58, so every mist band but the first hangs
     // behind it: interleave rather than veiling the whole stack.
     band.renderOrder = i === 0 ? -4 : RIDGE_ORDER[Math.min(4, i * 2)] + 1;
@@ -509,6 +575,19 @@ export function createWorld(env, tier, lighting) {
     cloudSea.apply(cur.cloud, cur.cloudCrest);
 
     groundMat.uniforms.uColor.value.copy(cur.ground);
+    // The ground takes the realm's *nearest* ridge colour, and `ridges` is the
+    // right ramp for it rather than a coincidence: those colours are authored
+    // for valley walls seen through mist, which is exactly what this landform
+    // is. (The *peaks* may never borrow them — they run pale at the far end and
+    // against the sky they invert the ladder. See palette.js.)
+    //
+    // The nearest rung, not the second: the shore is the closest land in the
+    // frame after the island itself, so it has to be the darkest thing out
+    // there. Painted a rung lighter it came out brighter than the range behind
+    // it, and a pale near ridge in front of dark far peaks reads as depth
+    // running backwards — the same inversion the peaks ramp exists to prevent,
+    // arrived at through the ground instead.
+    terrainMat.color.copy(cur.ridges[0]);
     for (const { mat, layer } of ridgeMats) mat.uniforms.uColor.value.copy(cur.ridges[layer]);
     if (waterMat) {
       waterMat.uniforms.uTop.value.copy(cur.waterTop);
@@ -523,21 +602,25 @@ export function createWorld(env, tier, lighting) {
   }
 
   function update(dt, t, reduced = false) {
-    // Mist bands drift laterally and wrap, so nothing ever visibly loops.
+    // Mist bands drift laterally and turn back at the limit their own width
+    // allows — see the band builder above for why that limit is not a constant.
+    // Turning rather than wrapping, too: a wrap teleports the whole band, and
+    // the fbm is in the band's own uv, so the pattern jumps with it.
     mist.children.forEach((b, i) => {
-      b.position.x += dt * (0.35 + i * 0.12) * (i % 2 ? -1 : 1);
-      const limit = 90 + i * 22;
-      if (b.position.x > limit) b.position.x = -limit;
-      if (b.position.x < -limit) b.position.x = limit;
+      const { homeX, drift } = b.userData;
+      if (drift <= 0) return;
+      b.position.x += dt * (0.35 + i * 0.12) * b.userData.dir;
+      if (b.position.x > homeX + drift) { b.position.x = homeX + drift; b.userData.dir = -1; }
+      if (b.position.x < homeX - drift) { b.position.x = homeX - drift; b.userData.dir = 1; }
     });
     cloudSea.update(dt, reduced);
   }
 
   return {
-    group, sky, skyMat, fog, water, ridges, pine, mist, cloudSea,
+    group, sky, skyMat, fog, water, terrain, ridges, pine, mist, cloudSea,
     applyPalette, setStorm, update,
     /** The resolved day: what the exposure and bloom dials should be showing. */
     atmosphere: cur,
-    materials: { groundMat, stoneMat, trunkMat, needleMat },
+    materials: { groundMat, stoneMat, trunkMat, needleMat, terrainMat },
   };
 }

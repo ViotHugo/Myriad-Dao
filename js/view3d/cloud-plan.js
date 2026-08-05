@@ -344,11 +344,25 @@ export const ACROSS_UV = VIEW_UV - Math.PI / 2;
  *   crest     how far this layer is mixed from the realm's cloud toward its
  *             crest colour. The top of a sea catches the light; the body of it
  *             does not.
- *   near/far  the radial fades, in units from the eye. Near is deliberately
- *             short — 20-odd units of ramp against a 50-unit billow, so a
- *             bank's leading edge is torn by the alpha map instead of ending in
- *             a smooth wash. Far is long, and the haze has taken most of it
- *             before the fade does.
+ *   near/far  the radial fades, in units from the eye — and both are *long*,
+ *             which they were not.
+ *
+ *             A radial fade on a horizontal plane is a ring, and a ring seen
+ *             from 11° above the surface projects to a horizontal line across
+ *             the whole picture. Whether that line reads as an edge or as a
+ *             gradient is decided entirely by how many units of ground the ramp
+ *             spans, because the projection is about to compress all of them
+ *             into almost nothing: the old near fade ran 88 → 118 units, which
+ *             lands between v 0.516 and 0.500 — sixteen thousandths of frame
+ *             height, about nineteen pixels on a phone. That is not a fade, it
+ *             is a ruled line, and stage 4's seam detector found it at 82% of
+ *             columns stepping in one row.
+ *
+ *             Stretched over sixty to a hundred and thirty units the same ramp
+ *             covers ten times the frame and reads as what it is: a sea that is
+ *             densest near the shore and thins into the air. The stagger
+ *             between layers matters as much — four ramps that end at the same
+ *             radius are one edge drawn four times.
  *   order     render order. Above the ridge strips and the standing cloud decks
  *             (-6 … -17), which is what lets the sea drown their feet, and
  *             below the near mist (-3).
@@ -365,10 +379,10 @@ export const ACROSS_UV = VIEW_UV - Math.PI / 2;
  *             surfaces undulate in lockstep and read as one thick one.
  */
 export const LAYERS = [
-  { repeat: [5.2, 13.0], rotation: ACROSS_UV + 0.00, heading: 0.10, opacity: 0.74, crest: 0.12, near: [38, 62], far: [150, 198], order: -4.25, seed: 17 },
-  { repeat: [6.4, 16.5], rotation: ACROSS_UV - 0.21, heading: -0.24, opacity: 0.64, crest: 0.38, near: [62, 88], far: [155, 198], order: -4.5, seed: 53 },
-  { repeat: [4.4, 11.0], rotation: ACROSS_UV + 0.27, heading: 0.31, opacity: 0.54, crest: 0.64, near: [88, 118], far: [160, 198], order: -4.75, seed: 91 },
-  { repeat: [7.2, 18.5], rotation: ACROSS_UV - 0.12, heading: -0.09, opacity: 0.44, crest: 0.90, near: [116, 152], far: [165, 198], order: -5, seed: 137 },
+  { repeat: [5.2, 13.0], rotation: ACROSS_UV + 0.00, heading: 0.10, opacity: 0.80, crest: 0.12, near: [32, 74], far: [70, 196], order: -4.25, seed: 17 },
+  { repeat: [6.4, 16.5], rotation: ACROSS_UV - 0.21, heading: -0.24, opacity: 0.70, crest: 0.38, near: [50, 96], far: [82, 197], order: -4.5, seed: 53 },
+  { repeat: [4.4, 11.0], rotation: ACROSS_UV + 0.27, heading: 0.31, opacity: 0.60, crest: 0.64, near: [68, 120], far: [94, 198], order: -4.75, seed: 91 },
+  { repeat: [7.2, 18.5], rotation: ACROSS_UV - 0.12, heading: -0.09, opacity: 0.50, crest: 0.90, near: [86, 146], far: [106, 199], order: -5, seed: 137 },
 ];
 
 /**

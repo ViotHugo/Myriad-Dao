@@ -8,81 +8,17 @@ import * as THREE from 'three';
 import { mulberry32 } from '../rng.js';
 import {
   makeInkMaterial, makeCloudMaterial, makeFallMaterial, makeParticleMaterial,
-  makeGlowMaterial, makeRockMaterial, makeMistMaterial,
+  makeGlowMaterial, makeGraniteMaterial, makeMistMaterial,
 } from './shaders.js';
 import { sceneryProgress } from './progress.js';
 import { placeAtDepth } from './framing.js';
 import { cragGeometry } from './rock.js';
-
-/** GLSL `fract`, so the CPU can replay what the vertex shader does to a seed. */
-function fract1(x) { return x - Math.floor(x); }
+import { peakGeometry } from './peaks.js';
+import { PEAK_MESHES, peakPlacements } from './peak-plan.js';
 
 /* ==================================================================== */
 /*  geometry                                                             */
 /* ==================================================================== */
-
-/**
- * The blank a karst spire is carved from: a straight fluted column, one unit
- * tall, with bedding ledges cut into its radius.
- *
- * Deliberately unshaped. All the silhouette — the taper, the waist, the
- * shoulder, the overhang, the lean — is applied per instance in the vertex
- * shader (see KARST_PROFILE in shaders.js), because an InstancedMesh draws one
- * geometry and a repeated silhouette reads as a picket fence however cleverly
- * the instances are scattered. Baking the shape here, as the first version did,
- * bought ninety-six copies of the same rock.
- *
- * What stays here is what has to vary per *vertex*: the vertical ribs that make
- * the wall fluted rather than turned on a lathe, and the horizontal ledges that
- * say sedimentary rock. `uv.x` carries the angle around the column, so the
- * shader never has to call atan and never picks up a seam where it wraps.
- */
-function karstColumn({ seed = 1, sides = 9, rings = 18, strata = 9, rib = 0.26 } = {}) {
-  const rand = mulberry32(seed);
-  const ribs = Array.from({ length: sides }, () => 1 - rib * rand());
-  const kinks = Array.from({ length: rings + 1 }, () => rand());
-
-  const pos = [];
-  const uvs = [];
-  const idx = [];
-
-  for (let r = 0; r <= rings; r++) {
-    const t = r / rings;
-    // Bedding planes: small steps in radius so the rock shows horizontal strata.
-    const step = Math.round(t * strata) / strata;
-    const ledge = 1 + (step - t) * 0.5;
-    const wobble = 1 + (kinks[r] - 0.5) * 0.12;
-    for (let s = 0; s <= sides; s++) {
-      const f = s / sides;
-      const a = f * Math.PI * 2;
-      const rad = ledge * wobble * ribs[s % sides];
-      pos.push(Math.cos(a) * rad, t, Math.sin(a) * rad);
-      uvs.push(f, t);
-    }
-  }
-  const stride = sides + 1;
-  for (let r = 0; r < rings; r++) {
-    for (let s = 0; s < sides; s++) {
-      const a = r * stride + s;
-      idx.push(a, a + stride, a + 1, a + 1, a + stride, a + stride + 1);
-    }
-  }
-  // Cap the summit. The shader's taper decides how wide this cap ends up, so
-  // the same mesh gives both a needle and a flat-topped mesa.
-  const apex = pos.length / 3;
-  pos.push(0, 1, 0);
-  uvs.push(0.5, 1);
-  for (let s = 0; s < sides; s++) {
-    const a = rings * stride + s;
-    idx.push(a, apex, a + 1);
-  }
-
-  const g = new THREE.BufferGeometry();
-  g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pos), 3));
-  g.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(uvs), 2));
-  g.setIndex(idx);
-  return g;
-}
 
 /** A pine in silhouette: a bare stem and three stacked skirts. Two draws' worth
  *  of shape in one, and the only thing in the frame that gives a peak a size. */
@@ -201,181 +137,125 @@ export function createScenery(env, tier) {
   const tmpQ = new THREE.Quaternion();
   const tmpV = new THREE.Vector3();
   const tmpS = new THREE.Vector3(1, 1, 1);
+  const tmpColor = new THREE.Color();
 
-  /* ---------------------------------------------- ten thousand peaks */
+  /* ------------------------------------------------------ fourteen peaks */
 
-  // Three ranks marching into the haze. Each is composed in frame space — say
-  // where the summit and the foot should land in the picture, and framing.js
-  // returns the world position that puts them there. The alternative, choosing
-  // world coordinates directly, quietly threw half of every range off the side
-  // of the screen: the world framing looks down a diagonal, so the visible
-  // slice of x at z = -140 is [-147, -65], nowhere near zero.
+  // Three ranks, six meshes, fourteen rocks. Where each one stands is solved in
+  // frame space by peak-plan.js — say where the summit and the foot should land
+  // in the picture and framing.js returns the world position that puts them
+  // there. Choosing world coordinates directly, the obvious alternative,
+  // quietly threw half of every range off the side of the screen: the world
+  // framing looks down a diagonal, so the visible slice of x at z = -140 is
+  // [-147, -65], nowhere near zero.
   //
-  // Ordering: the ridges in world.js are a painter's stack with gaps at
-  // -6/-9/-12/-15/-18, and each rank slots into the gap matching its depth, so
-  // a range can stand behind one ridge line and in front of the next.
-  const BANDS = [
-    {
-      name: 'near', order: -13, share: 0.24,
-      z: [-165, -230], rim: 0.30, fogCap: 0.22, strata: 0.20, lean: 4.4, foot: 0.20, sun: 1.0,
-      feet: [0.40, 0.52], rise: [0.10, 0.34], ceiling: 0.115, clusters: 4, slender: [0.032, 0.034],
-      geo: { sides: 9, rings: 18, strata: 11, rib: 0.30 },
-    },
-    {
-      name: 'mid', order: -16, share: 0.34,
-      z: [-255, -345], rim: 0.24, fogCap: 0.42, strata: 0.14, lean: 3.4, foot: 0.17, sun: 0.8,
-      feet: [0.33, 0.43], rise: [0.07, 0.245], ceiling: 0.132, clusters: 6, slender: [0.036, 0.038],
-      geo: { sides: 8, rings: 14, strata: 8, rib: 0.24 },
-    },
-    {
-      name: 'far', order: -19, share: 0.42,
-      z: [-365, -530], rim: 0.16, fogCap: 0.60, strata: 0.08, lean: 2.4, foot: 0.14, sun: 0.55,
-      feet: [0.285, 0.365], rise: [0.05, 0.175], ceiling: 0.152, clusters: 9, slender: [0.042, 0.044],
-      geo: { sides: 6, rings: 10, strata: 6, rib: 0.20 },
-    },
-  ];
-
-  // Where the host peak stands. A range with no hierarchy is a texture: the eye
-  // finds nothing to land on and reads the whole thing as pattern. Chinese
-  // landscape names the dominant mass 主山, the host, and everything else is its
-  // guest — so one pillar of the near rank is forced tall, forced forward, and
-  // put on a third rather than the middle.
-  const HOST = { u: 0.335, footV: 0.545, headV: 0.107, z: -158 };
+  // What lives here is what the *renderer* has to know: how much air each rank
+  // takes, and which ink it is cut from.
+  //
+  // `fogCap` is the most air a rank may take, not the amount. Uncapped exp² fog
+  // is total by four hundred units, which is right for mist and wrong for
+  // mountains — an ink-wash horizon is pale, not absent — and it fails at the
+  // near end too: at a hundred and sixty units the uncapped exponential already
+  // takes 40% of a bright air colour, which lifts near-black rock to a mid grey
+  // and puts the *closest* rank paler than one twenty times further away.
+  const BANDS = {
+    hero: { fogCap: 0.22, tier: 0 },
+    supporting: { fogCap: 0.42, tier: 1 },
+    distant: { fogCap: 0.60, tier: 2 },
+  };
 
   const peaks = new THREE.Group();
-  const spireSets = [];
-  const spireMats = [];
-  const summits = [];   // world positions of the tallest near/mid pillars
+  const peakSets = [];
+  const placements = peakPlacements().slice(0, Math.max(3, tier.peaks));
 
-  if (tier.spires > 0) {
-    BANDS.forEach((band, bi) => {
-      const count = Math.max(2, Math.round(tier.spires * band.share));
-      // Aerial perspective: the far rank is paler and less contrasty, which is
-      // the only cue that says "these are twenty kilometres away" in a picture
-      // with no texture and no atmosphere model. The colours come from the
-      // palette's `peaks` ramp, which is authored against the sky — never from
-      // the ridge ramp, which is authored against mist and runs pale.
-      const mat = makeRockMaterial(env, {
-        rim: band.rim, fogCap: band.fogCap, strata: band.strata,
-        lean: band.lean, foot: band.foot, sun: band.sun,
-      });
-      const geo = karstColumn({ seed: 11 + bi * 17, ...band.geo });
-      // The seed each instance is carved by. Without it every pillar in the
-      // rank is the same rock painted ninety-six times.
-      const seeds = new Float32Array(count);
-      for (let i = 0; i < count; i++) seeds[i] = rand();
-      geo.setAttribute('aSeed', new THREE.InstancedBufferAttribute(seeds, 1));
-      const im = new THREE.InstancedMesh(geo, mat, count);
+  // One material for the whole range, and one draw call per unique rock.
+  //
+  // The three ranks differ in two things and both are per *instance*: the ink
+  // they are cut from, carried on `instanceColor`, and how much air they take,
+  // carried on an instanced attribute. Three materials would mean grouping the
+  // instances by rank as well as by mesh, which is eighteen draw calls for
+  // fourteen rocks. The material's own colour is white because the ink is the
+  // instance's; see setPalette below.
+  const peakMat = makeGraniteMaterial(env, { color: '#ffffff', fogCap: 0.42 });
 
-      // Massifs, not a picket fence. Karst erodes in clusters: one dominant
-      // pillar with a crowd of lesser ones at its feet, then a gap, then the
-      // next cluster. Scattering uniformly across the frame instead — the
-      // obvious thing — produces evenly spaced needles of even height, which
-      // reads as a fence and not as a mountain range.
-      const centres = Array.from({ length: band.clusters }, (_, c) => (
-        // Overscan past both edges: the player can swing the camera through a
-        // 0.62 rad arc, and a range that stops dead at the frame edge gives the
-        // whole illusion away the first time they drag.
-        -0.34 + (c + 0.28 + rand() * 0.44) * (1.68 / band.clusters)
-      ));
+  PEAK_MESHES.forEach((spec, mi) => {
+    const mine = placements.filter((p) => p.meshIndex === mi);
+    if (!mine.length) return;
+    const geo = peakGeometry(spec);
+    const caps = new Float32Array(mine.length);
+    mine.forEach((p, i) => { caps[i] = BANDS[p.band].fogCap; });
+    geo.setAttribute('aFogCap', new THREE.InstancedBufferAttribute(caps, 1));
 
-      for (let i = 0; i < count; i++) {
-        const host = bi === 0 && i === 0;
-        const z = host ? HOST.z : band.z[0] + (band.z[1] - band.z[0]) * rand();
-        const centre = centres[i % centres.length];
-        // Two uniforms summed is a cheap bell curve: dense at the cluster's
-        // heart, thinning at its edges.
-        const u = host ? HOST.u : centre + ((rand() + rand()) - 1) * 0.16;
-        const footV = host
-          ? HOST.footV
-          : band.feet[0] + (band.feet[1] - band.feet[0]) * rand();
-        // Prominence is skewed hard toward the low end so each cluster gets a
-        // few tall pillars and many short ones, which is what gives the range a
-        // silhouette instead of a plateau. The first of every cluster is forced
-        // tall, so no cluster comes out uniformly stunted.
-        const lead = i < centres.length;
-        const p = lead ? 0.82 + rand() * 0.18 : Math.pow(rand(), 1.8);
-        const rise = band.rise[0] + (band.rise[1] - band.rise[0]) * p;
-        const headV = host ? HOST.headV : Math.max(band.ceiling, footV - rise);
-        const foot = placeAtDepth(u, footV, z);
-        const head = placeAtDepth(u, headV, z);
-        if (!foot || !head) continue;
-
-        const h = head[1] - foot[1];
-        // Karst are slender: width well under a tenth of height, or they read
-        // as buttes. Thinner as they recede, so the far rank stays needle-like.
-        const w = h * (band.slender[0] + rand() * band.slender[1]) * (host ? 1.28 : 1);
-        tmpV.set(foot[0], foot[1], z);
-        // The spin is what makes one geometry read as many; the shader's own
-        // lean does the rest, so the matrix keeps the pillar upright.
-        tmpQ.setFromEuler(new THREE.Euler(0, rand() * Math.PI * 2, 0, 'YXZ'));
-        tmpS.set(w, h, w);
-        im.setMatrixAt(i, tmpMat.compose(tmpV, tmpQ, tmpS));
-
-        // Remember the commanding summits: pines go up there, and a pine is the
-        // only thing in the picture that tells you how big a rock is.
-        //
-        // The shader leans each pillar off plumb, so its summit is not above its
-        // foot. Replaying that shear here — same seed, same arithmetic — is what
-        // puts the trees on the rock instead of beside it.
-        if (bi < 2 && (host || (lead && rand() < 0.75))) {
-          const lean = band.lean * w;
-          summits.push({
-            x: foot[0] + (fract1(seeds[i] * 13.77) - 0.5) * lean,
-            y: head[1],
-            z: z + (fract1(seeds[i] * 17.31) - 0.5) * lean * 0.8,
-            w,
-          });
-        }
-      }
-      im.instanceMatrix.needsUpdate = true;
-      im.frustumCulled = false;
-      im.renderOrder = band.order;
-      peaks.add(im);
-      spireSets.push(im);
-      spireMats.push(mat);
+    const im = new THREE.InstancedMesh(geo, peakMat, mine.length);
+    mine.forEach((p, i) => {
+      tmpV.set(p.position[0], p.position[1], p.position[2]);
+      // Every instance gets its own heading and its own couple of degrees off
+      // plumb, and no two in the set share either — a mesh drawn twice at the
+      // same rotation is the picket fence this whole stage exists to remove.
+      tmpQ.setFromEuler(new THREE.Euler(p.tilt[0], p.yaw, p.tilt[1], 'YXZ'));
+      tmpS.setScalar(p.scale);
+      im.setMatrixAt(i, tmpMat.compose(tmpV, tmpQ, tmpS));
+      im.setColorAt(i, new THREE.Color('#ffffff'));
     });
-  }
+    im.instanceMatrix.needsUpdate = true;
+    im.frustumCulled = false;
+    peaks.add(im);
+    // `ranks` is where each instance sits in the composition's own order —
+    // heroes first, distant last — which is what lets the progression reveal
+    // the range from the front without renumbering anything.
+    peakSets.push({ mesh: im, spec, ranks: mine.map((p) => placements.indexOf(p)), placements: mine });
+  });
   group.add(peaks);
 
   /* ------------------------------------------------- pines on the summits */
 
-  // Scale. A karst pillar with nothing on it is an abstract shape and could be
-  // three metres tall; put a tree on its shoulder and it is instantly three
-  // hundred. One instanced draw for the whole range.
+  // Scale. A peak with nothing on it is an abstract shape and could be three
+  // metres tall; put a tree on its shoulder and it is instantly three hundred.
+  // The host carries a pavilion for the same reason, built into its own mesh.
+  // One instanced draw for every tree in the range.
   const pineMat = makeInkMaterial(env, {
     color: '#101820', rim: 0.30, bands: 2, flat: true, fogCap: 0.34,
   });
   let summitPines = null;
-  if (summits.length) {
+  const pineRanks = [];
+  {
+    // Only on the crowns that are broad enough to stand on, and only on the two
+    // near ranks — a tree on a peak four hundred units away is a subpixel.
+    const wooded = placements.filter((p) => (
+      p.band !== 'distant' && (p.mesh.top === 'plateau' || p.mesh.top === 'crown')
+    ));
     const perSummit = 3;
-    summitPines = new THREE.InstancedMesh(pineGeometry(), pineMat, summits.length * perSummit);
-    let n = 0;
-    for (const s of summits) {
-      // Sized as a *fraction* of the pillar's width, never a multiple of it: a
-      // pine on a karst summit is a serration on the silhouette, a few pixels
-      // of it. Scaled the other way round they came out taller than the peaks
-      // they stand on, which not only looks absurd but destroys the very cue
-      // they are there to give.
-      //
-      // The summit is where the shader's taper leaves it, so the cap is a
-      // fraction of the pillar's full width — the trees have to crowd in.
-      const cap = s.w * 0.34;
-      for (let k = 0; k < perSummit; k++) {
-        const a = rand() * Math.PI * 2;
-        const r = cap * rand();
-        const scale = s.w * (0.13 + rand() * 0.11) * (k === 0 ? 1.45 : 1);
-        tmpV.set(s.x + Math.cos(a) * r, s.y - s.w * 0.05, s.z + Math.sin(a) * r);
-        tmpQ.setFromEuler(new THREE.Euler((rand() - 0.5) * 0.14, rand() * 6.28, (rand() - 0.5) * 0.14, 'YXZ'));
-        tmpS.set(scale, scale * (1.5 + rand() * 0.8), scale);
-        summitPines.setMatrixAt(n++, tmpMat.compose(tmpV, tmpQ, tmpS));
+    if (wooded.length) {
+      summitPines = new THREE.InstancedMesh(pineGeometry(), pineMat, wooded.length * perSummit);
+      let n = 0;
+      for (const p of wooded) {
+        // Sized as a *fraction* of the crown, never a multiple of it: a pine on
+        // a summit is a serration on the silhouette, a few pixels of it. Scaled
+        // the other way round they come out taller than the peaks they stand on,
+        // which not only looks absurd but destroys the cue they exist to give.
+        const crown = p.mesh.radiusBottom * p.mesh.radiusTop * p.scale;
+        for (let k = 0; k < perSummit; k++) {
+          const a = rand() * Math.PI * 2;
+          const r = crown * (0.35 + rand() * 0.55);
+          const scale = crown * (0.16 + rand() * 0.12) * (k === 0 ? 1.4 : 1);
+          tmpV.set(
+            p.summit[0] + Math.cos(a) * r,
+            p.summit[1] - crown * 0.08,
+            p.summit[2] + Math.sin(a) * r,
+          );
+          tmpQ.setFromEuler(new THREE.Euler((rand() - 0.5) * 0.14, rand() * 6.28, (rand() - 0.5) * 0.14, 'YXZ'));
+          tmpS.set(scale, scale * (1.5 + rand() * 0.8), scale);
+          summitPines.setMatrixAt(n, tmpMat.compose(tmpV, tmpQ, tmpS));
+          pineRanks.push(placements.indexOf(p));
+          n++;
+        }
       }
+      summitPines.count = n;
+      summitPines.instanceMatrix.needsUpdate = true;
+      summitPines.frustumCulled = false;
+      summitPines.renderOrder = -12;
+      group.add(summitPines);
     }
-    summitPines.count = n;
-    summitPines.instanceMatrix.needsUpdate = true;
-    summitPines.frustumCulled = false;
-    summitPines.renderOrder = -12;
-    group.add(summitPines);
   }
 
   /* -------------------------------------------------- the sea of cloud */
@@ -656,13 +536,16 @@ export function createScenery(env, tier) {
     // furthest rank *lighter* than the air behind it, which reads as a smudge
     // rather than as distance.
     const ink = p.peaks || p.ridges;
-    spireMats.forEach((m, i) => {
-      m.uniforms.uColor.value.set(ink[Math.min(i, ink.length - 1)]);
-      if (p.sun) {
-        m.uniforms.uSunColor.value.set(p.sun.color);
-        m.uniforms.uSun.value = p.sun.power * BANDS[i].sun;
-      }
-    });
+    // Per instance, not per material: one material draws all three ranks, and
+    // what separates them is the ink each rock is cut from and the cap on how
+    // much air it may take. `instanceColor` multiplies the material's own
+    // colour, which is white, so this *is* the diffuse.
+    for (const set of peakSets) {
+      set.placements.forEach((pk, i) => {
+        set.mesh.setColorAt(i, tmpColor.set(ink[Math.min(BANDS[pk.band].tier, ink.length - 1)]));
+      });
+      if (set.mesh.instanceColor) set.mesh.instanceColor.needsUpdate = true;
+    }
     pineMat.uniforms.uColor.value.set(ink[0]);
     birdMat.uniforms.uColor.value.set(ink[0]);
     barkMat.uniforms.uColor.value.set(p.bark || '#1b1519');
@@ -684,7 +567,7 @@ export function createScenery(env, tier) {
   // player has actually come, so the view out of the window answers "how am I
   // doing?" before any number does.
   const prog = {
-    peakCount: BANDS.map(() => 0),   // per rank
+    peaks: 0,            // how many of the fourteen are standing
     cloudDrop: 0,
     blossom: 0,          // 0 bare .. 1 full bloom
     petalRate: 0,
@@ -698,11 +581,21 @@ export function createScenery(env, tier) {
   function sync(vm) {
     const next = sceneryProgress(vm, tier);
 
-    spireSets.forEach((im, i) => {
-      const max = im.instanceMatrix.count;
-      prog.peakCount[i] = Math.max(3, Math.round(max * next.peakFraction));
-      im.count = prog.peakCount[i];
-    });
+    // The range grows from the front. Instances are ordered by the
+    // composition — the three heroes, then the supporting mass, then the
+    // skyline — so truncating the count reveals the distance last, which is
+    // what "the peaks come out of the cloud as you climb" has to mean when
+    // there are fourteen of them instead of ninety-six.
+    // The floor is the three heroes and the whole distant skyline — nine —
+    // because peak-plan.js orders the reveal that way and a range with no
+    // horizon reads as unfinished rather than as unearned. See REVEAL there.
+    prog.peaks = Math.max(9, Math.round(placements.length * next.peakFraction));
+    for (const set of peakSets) {
+      set.mesh.count = set.ranks.filter((r) => r < prog.peaks).length;
+    }
+    if (summitPines) {
+      summitPines.count = pineRanks.filter((r) => r < prog.peaks).length;
+    }
 
     prog.cloudDrop = next.cloudDrop;
     prog.blossom = next.blossom;
@@ -817,5 +710,5 @@ export function createScenery(env, tier) {
     plum.rotation.z = Math.sin(t * 0.32 * wind) * 0.012 * wind;
   }
 
-  return { group, peaks, plum, cranes, petals, setPalette, sync, update, spireSets };
+  return { group, peaks, plum, cranes, petals, setPalette, sync, update, peakSets };
 }

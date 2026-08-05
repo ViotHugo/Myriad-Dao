@@ -382,12 +382,20 @@ night sky stays black and reads as a silhouette.
 | Age & death | Hair and beard move through four brackets of `age / lifespan`, so a 500-year-old Nascent Soul is still in his prime. Withered desaturates the world. Forced rebirth lifts the nascent soul out and away. |
 | Reincarnation | The frame runs to ink from the outside in, then reforms at dawn. |
 
-### The landscape: ten thousand peaks
+### The landscape: fourteen peaks and the ground they stand on
 
 The horizon is the game's other protagonist. It is built in `view3d/scenery.js`
-from three ranks of instanced karst spires, standing cloud, a plum tree, cranes,
+from three ranks of instanced granite peaks, standing cloud, a plum tree, cranes,
 and a waterfall — the stock imagery of the genre, assembled from noise and
 primitives at a cost of about a dozen draw calls.
+
+> **The range was rebuilt in stage 4.** Everything from "**The spires**" to
+> "**A host peak**" below describes the *previous* range: ninety-six instances of
+> one fluted column, reshaped per instance in the vertex shader. It is kept
+> because the two traps recorded in it are real and general — a normal pushed
+> through a 1:20 instance matrix, and a pine sized as a multiple of the rock it
+> stands on — but the range it describes is gone. What replaced it, and why, is
+> [Stage 4](#stage-4--granite) at the end of this section.
 
 ### The value ladder
 
@@ -400,6 +408,7 @@ scheme, it is three clearly separated values:
 | **cloud** | the brightest thing in the frame | near white; in *shan shui* the unpainted paper **is** the cloud, and everything else is read against it |
 | **sky** | the middle | a gradient from a luminous skyline to a dark zenith |
 | **peaks** | ink | always darker than the sky behind them, stepping near-black to pale as they recede |
+| **ground** | the darkest thing out there after the island | the near shore is the closest land in the frame, so it takes the *nearest* rung of the ridge ramp. A rung lighter and it came out brighter than the range behind it, which is depth running backwards |
 
 The spires used to be tinted with the **ridge** ramp. Those colours are authored
 for valley walls seen against mist and deliberately run pale at the far end;
@@ -432,8 +441,8 @@ Two smaller things in the same family:
   actually composed for. (The star fade had the same bug and rendered about a
   tenth of a star.)
 
-**The spires.** A karst pillar is a near-vertical fluted wall that only pinches
-in near its summit. Tapering smoothly from the base — the obvious thing — gives
+**The spires** *(superseded by stage 4; kept for the two traps in it)*. A karst
+pillar is a near-vertical fluted wall that only pinches in near its summit. Tapering smoothly from the base — the obvious thing — gives
 a cone, and a field of cones reads as a row of cypress trees.
 
 But shaping the *geometry* only moves the problem: an `InstancedMesh` draws one
@@ -476,10 +485,12 @@ evenly spaced needles of even height — a picket fence, not a range.
 
 **Aerial perspective is capped, not absolute.** Exponential-squared fog is total
 by about 400 units, which is right for haze and wrong for mountains: an ink-wash
-horizon is pale, not absent. Each rank passes a `fogCap` (0.22 / 0.42 / 0.60,
+horizon is pale, not absent. Each rank carries a `fogCap` (0.22 / 0.42 / 0.60,
 near to far) that limits how much of the air colour it can take, so the far rank
 stays a few percent darker than the air it stands in. That residual contrast is
-the entire depth cue in a picture with no texture and no atmosphere model.
+the entire depth cue in a picture with no texture and no atmosphere model. Since
+stage 4 the cap rides an *instanced attribute* rather than a material, which is
+what lets one material serve all three ranks.
 
 The cap matters just as much at close range and for the opposite reason. The
 midground pines and rock spurs sit seventy units out, where the uncapped
@@ -488,11 +499,12 @@ rock to a mid grey. The *nearest* thing in the midground came out paler than
 ranges twenty times further away, and the depth order of the whole picture read
 backwards. They are capped too.
 
-**The feet dissolve in the shader.** Each rank fades its lowest fifth into the
-air colour, so a pillar emerges from the cloud instead of being sliced off by
-whatever plane happens to be there. This is what removes the hard horizontal cut
-across the range, and it does it without depending on a cloud deck landing in
-exactly the right place.
+**The feet dissolved in the shader** *(and no longer do)*. Each rank faded its
+lowest fifth into the air colour, so a pillar emerged from the cloud instead of
+being sliced off by whatever plane happened to be there. Stage 4's peaks are
+opaque lit geometry and a fade like that is a lie the depth buffer does not tell,
+so the same job is done by putting the ground in front of every base — see
+[Stage 4](#stage-4--granite).
 
 **Cloud is a standing band, not a floor, and it is the light.** A horizontal
 deck under a camera pitched 0.17 rad is seen almost edge-on, and however shallow
@@ -613,6 +625,123 @@ the sky colour; the haze is applied per vertex instead, capped at 0.30, from the
 same `env.uFogColor` and `env.uFogDensity` every other material reads. One air,
 still.
 
+### Stage 4 — granite
+
+The range above worked as arithmetic and failed as a picture. Ninety-six
+instances of one profile, however cleverly the shader varied it, came back as
+**fifteen identical melted candles**: a smooth taper with a smooth wobble,
+repeated, so the eye found the repeat in about a second and stopped reading the
+frame as landscape at all. Adding instances made it worse; the count was never
+the problem.
+
+**Fewer and bigger.** Fourteen peaks over six meshes, three ranks — three hero,
+five supporting, six distant. Each mesh is carved once, properly, and each peak
+is large enough in frame to be worth looking at. Six draw calls against the old
+three, and the two extra buy every silhouette in the picture.
+
+**A peak is a cylinder that has been broken.** `view3d/peaks.js`, three steps:
+
+- **the blank** — `CylinderGeometry(radiusTop, radiusBottom, height, 7–9, 12–16)`.
+  Seven sides means the cross-section is *already* a polygon, so spinning an
+  instance changes its outline; a smooth lathe has the same outline from every
+  angle and a random heading buys nothing. `radiusTop` is never zero: between
+  0.15 and 0.6 of the bottom. A cylinder closed to a point is a cone, and a cone
+  is the one shape the eye names instantly.
+- **the ridges** — every vertex is pushed along its own radius by ridged simplex
+  noise, `1 - |noise(p · freq)|`, two octaves, sampled fast around the column and
+  slow up it. The absolute value folds the field at every zero crossing, so the
+  smooth places become *creases*: vertical fracture running the height of the
+  wall, which is what granite does and what the eye reads a mountain's surface
+  off at any distance. Simplex rather than value noise because value noise folds
+  along its own axes, which puts four ribs at the compass points on every rock.
+- **the shelves** — two to four rings snapped inward, at rows chosen from the
+  seed. Under flat shading the triangle bands either side of a snapped ring turn
+  nearly horizontal and take a completely different amount of sun from the wall
+  above and below, so a ledge reads as a line of light across the rock.
+
+Then the tops, which is what six meshes are *for*: a flat plateau with a small
+pavilion built into the same buffer, a notched saddle, a leaning spire (the lean
+is in the mesh, so a spin changes which way it leans), a through-arch, and two
+crowns. Negative space and a horizon line read at distances where no amount of
+surface detail survives.
+
+**Welded by construction.** A cylinder shares its rim vertices with its caps and
+repeats the seam column at the wrap. Every displacement here is a pure function
+of the vertex's *position*, so the duplicates get the same answer and the mesh
+never splits; anything that reached for a vertex index would tear it open along
+the seam and at both caps. And a radius may never reach the axis — through zero
+the two triangles sharing the vertex fold through each other and the face renders
+with its winding, and its lighting, inverted: a bright shard in the middle of a
+dark rock.
+
+**One material, three ranks.** A stock `MeshStandardMaterial`, flat shaded,
+roughness 0.9, metalness 0, opaque — the first stock lit material in the
+renderer, and it earns it: there are hundreds of genuinely different facets per
+rock now, and that is a surface that wants lighting rather than painting. Three
+things are patched into it in `makeGraniteMaterial`:
+
+| | why |
+|---|---|
+| capped air, per instance | the rank's `fogCap` rides an instanced attribute, so one material serves all three ranks — same rock, three amounts of air. Three materials would mean grouping instances by rank *and* by mesh: eighteen draw calls for fourteen rocks |
+| a hot edge on the sun's side | the gate is near-silhouette on the camera side with a hot rim on the sun side. At a grazing sun, Lambert gives the first and not the second, because the lit facets are exactly the ones pointing away from the eye |
+| a gain of π | `BRDF_Lambert` divides by π and every colour in this renderer was authored against shading that does not. Without it the range renders three times darker than the palette says it is |
+
+`toneMapped: false` and `fog: false` for the same reasons the cloud sea sets
+them. Nothing out there wears the accent: the old rock shader added a trace of
+`uRimColor`, which is the player's own qi, and a background element carrying it
+makes her light ordinary.
+
+**The ground, and the seam it covers.** The valley floor was a flat
+`PlaneGeometry(320, 130, 1, 1)`. Flat was not the fault on its own — the fault is
+what a flat horizontal surface does at this camera. The eye is at most 11° above
+it, so its far half is compressed into a couple of percent of frame height and
+*every* gradient on it collapses into one ruled line. That line was the
+razor-straight ground/sky seam, and it could not be softened, because it was the
+projection flattening the softness and not the shader failing to supply it.
+
+Measured: the cloud sea's own near fade ran 88 → 118 units, which lands between
+v 0.516 and 0.500 — nineteen pixels on a phone. A seam detector (fraction of
+columns that step at the same row) put it at **0.82**, and stretching every fade
+in `cloud-plan.js` over sixty to a hundred and thirty units did not move it,
+because at a grazing angle radial distance barely maps to frame height at all.
+The sea cannot end in the air without drawing a line. It has to end *behind
+something*.
+
+So `terrain-plan.js` is a long section with a **far shore** in it: a subdivided
+plane displaced by low-frequency fractal noise — plain, not ridged; land does not
+fracture, and a valley floor built of creases reads as crumpled paper — whose
+crest at z = −110 stands at +4 with six or seven units of relief on it. That puts
+it nearer than 198 units and higher than the sea's topmost layer, so the land
+breaks the surface of the sea while still inside it, and the boundary between
+cloud and land is the *terrain's* silhouette. Across the frame that silhouette
+runs v 0.403 … 0.441, against the sea's edge at 0.472. In the horizon band the
+seam detector reads **0.28**, and what it is finding now is the ridgeline itself.
+
+Two consequences worth recording:
+
+- **A river is what this valley cannot have.** The section climbs the whole way
+  from the eye to the shore — that is what makes the shore a shore — so a channel
+  cut along it has its downhill bank *below* the water, and a flat sheet with a
+  bank missing runs out of its own bed and draws a straight edge across the
+  valley. The fix for the seam, reintroducing the seam. It is a tarn now, in a
+  closed hollow, and the suite walks the rim rather than trusting the section.
+- **Every foot sits below the crest.** A peak's base is a cap facing straight
+  down: no sun, the ground half of the hemisphere, and a hard horizontal edge.
+  Above the crest that is a shard hanging under a mountain — the same artefact
+  the old shader hid by dissolving the lowest fifth of each pillar into the air.
+  Dissolving an *opaque* surface is a lie the depth buffer does not tell, so the
+  fix is geometric: the ground is in front of every base in the range.
+
+**And the floating white polygon.** Not z-fighting, and no depth offset could
+have touched it: the mist bands were 2.2 frames wide and wrapped at ±90 world
+units, so at 56 units across they walked their own faded corner through the
+picture. The limit is derived from the band now — half its width, less the 14%
+each side that the shader fades, less the frame it has to keep covered — and they
+turn at it rather than wrapping, because a wrap teleports the fbm with the mesh.
+
+The one genuine pair of near-coplanar surfaces left is the tarn and its own bed,
+and that takes the small negative `polygonOffset` the brief asks for.
+
 ### Composing in frame space
 
 The camera is authored and fixed, so the frame — not the world — is the thing
@@ -676,7 +805,7 @@ dials, so it is testable without a browser:
 
 | Cue | Driven by |
 |---|---|
-| How many peaks stand out of the cloud | realm (30% → 100%) |
+| How many peaks stand out of the cloud | realm (9 of 14 → all 14) |
 | How far the cloud sea has sunk | realm |
 | Plum in bud / full bloom / shedding | stage within the realm |
 | Petal fall rate | stage — heaviest at Peak, when a breakthrough is due |
@@ -816,7 +945,7 @@ This is a phone game that will sit open for hours.
 
 | Budget | Target | Measured (this build) |
 |---|---|---|
-| Draw calls | < 80 | **57** worst case (Immortal Ascension, Grand Sect, high tier) |
+| Draw calls | < 90 | **87** at medium tier, of which **7** are all of stage 4's rock: six instanced peak meshes and one ground |
 | Total download | < 8 MB | **~1035 KB**, of which Three.js is 677 KB |
 | Downloaded art assets | prefer zero | **zero** — all geometry and shading is procedural |
 | Frame rate | 60 fps mid-range Android, 30 fps floor | quality tiers + watchdog (below) |
@@ -855,7 +984,7 @@ so a tier switch can never tear down a tribulation mid-strike.
 | Ridge layers | 3 | 5 | 5 |
 | Mist bands | 2 | 4 | 6 |
 | Qi motes | 60 | 150 | 320 |
-| Karst spires | 26 | 58 | 96 |
+| Peaks (of 14) | 10 | 14 | 14 |
 | Instanced disciples | 8 | 16 | 24 |
 | Water | off | on | on |
 

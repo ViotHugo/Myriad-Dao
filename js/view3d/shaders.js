@@ -384,191 +384,167 @@ export function makeInkMaterial(env, {
   });
 }
 
-/* ----------------------------------------------------------------- karst */
-
-// One column of rock, reshaped per instance in the vertex shader.
-//
-// An InstancedMesh draws one geometry, so a field of them is a field of the same
-// silhouette — and a repeated silhouette reads as a picket fence no matter how
-// the instances are scattered, which is exactly what the first range did. The
-// fix is not more geometries (that is more draw calls); it is to give each
-// instance a seed and let the shader carve the profile: needles and blunt
-// towers, twin summits, overhanging bellies, and a lean off plumb. The mesh is
-// built as a plain fluted column and every silhouette decision is made here.
-const KARST_PROFILE = /* glsl */ `
-  // Radius multiplier at height t (0 foot, 1 summit) for a rock with this seed.
-  float karstProfile(float t, float s) {
-    // Needle at one end, flat-topped tower at the other. The blunt ones are what
-    // stop a range looking like a bed of nails.
-    float blunt = fract(s * 2.71);
-    float taperStart = mix(0.40, 0.88, blunt);
-    float taperTo = mix(0.05, 0.46, blunt);
-    float w = 1.0 - smoothstep(taperStart, 1.0, t) * (1.0 - taperTo);
-
-    // Undercut just above the foot: karst is dissolved out of a plateau, not
-    // piled up, so the pillar is narrowest a little above where it lands.
-    w *= 1.0 - 0.15 * sin(min(1.0, t / 0.42) * 3.14159265);
-
-    // A shoulder — a lesser summit beside the main one. Real ranges are full of
-    // them, and it is the cheapest way to break the one-peak-one-point rhythm.
-    float sh = fract(s * 5.317);
-    float at = mix(0.48, 0.74, fract(s * 9.73));
-    w += step(0.52, sh) * exp(-pow((t - at) / 0.085, 2.0)) * (0.16 + 0.46 * (sh - 0.52));
-
-    // A few carry an overhanging belly, so not every wall is a plumb drop.
-    float ov = fract(s * 13.11);
-    w *= 1.0 + step(0.70, ov) * exp(-pow((t - 0.32) / 0.20, 2.0)) * 0.34;
-
-    return max(w, 0.02);
-  }
-`;
+/* --------------------------------------------------------------- granite */
 
 /**
- * The ten thousand peaks. Instanced, seed-carved, lit as ink: a dark body, a
- * lit edge where the sun catches the ridge, horizontal bedding, vertical
- * fluting, and a foot that dissolves into the air it stands in.
+ * The range, and the ground it stands on: a stock `MeshStandardMaterial`, flat
+ * shaded, with three things patched into it.
+ *
+ * ---------------------------------------------------------------------------
+ * Why a stock material, in a file with no stock materials in it
+ *
+ * Everything else here is hand-written because it is *drawing* something — a
+ * gradient, a billow, a wash — and a light model would only get in the way. The
+ * peaks are the opposite case. Since stage 4 they are real geometry: a broken
+ * cylinder with ridged noise cut into it and shelves snapped through it, so
+ * there are hundreds of facets per rock, each genuinely facing a different way.
+ * That is a surface that wants *lighting*, not painting, and the three lights
+ * the rig already owns are exactly the light it should take. `flatShading`
+ * means the fragment normal is the facet's own — the terminator lands on the
+ * facet edges, which is what makes broken rock read as broken rather than as a
+ * smooth thing with a texture on it.
+ *
+ * Three flags are load-bearing and silent if wrong:
+ *
+ *   toneMapped: false   the composer applies the ACES curve once, at the end.
+ *                       A stock material would apply it again in its own
+ *                       fragment shader and the range would come back milky.
+ *   fog: false          `scene.fog` is exp² and total by four hundred units,
+ *                       which would erase the far rank entirely. The capped air
+ *                       below is applied instead, from the same
+ *                       `env.uFogColor` / `uFogDensity` every ink shader reads.
+ *                       One air, still.
+ *   transparent: false  rock is opaque. It is worth saying out loud because a
+ *                       transparent peak sorts against the cloud instead of
+ *                       occluding it, and the whole value ladder inverts.
+ *
+ * ---------------------------------------------------------------------------
+ * And three things patched in
+ *
+ *   the air     capped aerial perspective, per instance. Uncapped exp² fog is
+ *               total by 400 units — right for mist, wrong for mountains, since
+ *               an ink-wash horizon is pale rather than absent. The cap is an
+ *               instanced attribute so one material can serve all three ranks:
+ *               same rock, three amounts of air, which is what makes the ranks
+ *               recede without three materials and three draw calls.
+ *   the rim     a narrow hot line where the surface turns away from the eye on
+ *               the sun's side. The gate for this stage is that at dawn and
+ *               sunset every peak is near-silhouette on the camera side with a
+ *               hot edge on the sun side; Lambert alone gives the first and not
+ *               the second, because at a grazing sun the lit facets are exactly
+ *               the ones pointing away from the camera.
+ *   the gain    π. `BRDF_Lambert` divides by π, and every colour in this
+ *               renderer — the ink, the ridges, the cloud — was authored
+ *               against shading that does not. Undoing it here is what puts the
+ *               range on the same value ladder as everything around it instead
+ *               of three times darker than the palette says.
+ *
+ * Nothing wears the accent: `uRimColor` is the player's own qi, and the rules
+ * say a background element may not carry it. The only warm edge out here is the
+ * sun's.
  */
-export function makeRockMaterial(env, {
-  color = '#1d2632', rim = 0.5, fogCap = 0.5, strata = 0.16, lean = 1.8,
-  sunColor = '#ffe3bc', sun = 0.5, foot = 0.20,
+export function makeGraniteMaterial(env, {
+  color = '#1d2632', fogCap = 0.4, sunEdge = 0.30, gain = Math.PI,
 } = {}) {
-  return new THREE.ShaderMaterial({
-    uniforms: envUniforms(env, {
-      uColor: { value: new THREE.Color(color) },
-      uSunColor: { value: new THREE.Color(sunColor) },
-      uRim: { value: rim },
-      uSun: { value: sun },
-      uFogCap: { value: fogCap },
-      uStrata: { value: strata },
-      uLean: { value: lean },
-      uFoot: { value: foot },
-    }),
-    vertexShader: /* glsl */ `
-      uniform float uLean;
-      attribute float aSeed;
-      varying vec3 vNormalW;
-      varying vec3 vViewDir;
-      varying float vDepth;
-      varying float vWorldY;
-      varying float vT;
-      varying float vSeed;
-      varying float vAngle;
-      ${KARST_PROFILE}
-      void main() {
-        float s = aSeed;
-        vSeed = s;
-        // The mesh is a unit column: y is height, xz the fluted ring. uv.x is
-        // the angle around it, carried as an attribute so the fluting never
-        // picks up a seam where atan would wrap from +pi to -pi.
-        float t = clamp(position.y, 0.0, 1.0);
-        vT = t;
-        vAngle = uv.x * 6.2831853;
-        float r0 = length(position.xz);
-        vec2 radial = r0 > 1e-4 ? position.xz / r0 : vec2(1.0, 0.0);
-        vec3 p = position;
-        p.xz = radial * (r0 * karstProfile(t, s));
-        // Off plumb. Local x is scaled by the instance's width, so the shear has
-        // to be large here to shift a summit by a visible fraction of its height.
-        p.x += (fract(s * 13.77) - 0.5) * uLean * t * t;
-        p.z += (fract(s * 17.31) - 0.5) * uLean * 0.8 * t * t;
-
-        // A pillar is scaled ~1:20 by its instance matrix, so a normal built in
-        // local space and pushed through that matrix comes out with its vertical
-        // component multiplied by twenty — every summit ends up facing straight
-        // at the sun and the whole range bleaches white. (Normals want the
-        // inverse transpose, not the matrix.) So the slope is converted into the
-        // instance's real proportions here, and only its *rotation* is applied.
-        float wI = 1.0, hI = 1.0, dI = 1.0;
-        #ifdef USE_INSTANCING
-          wI = length(instanceMatrix[0].xyz);
-          hI = length(instanceMatrix[1].xyz);
-          dI = length(instanceMatrix[2].xyz);
-        #endif
-        float slope = (karstProfile(t + 0.02, s) - karstProfile(t, s)) / 0.02;
-        vec2 nrm2 = normalize(vec2(hI, -slope * wI));
-        vec3 n = vec3(radial.x * nrm2.x, nrm2.y, radial.y * nrm2.x);
-
-        vec4 localPos = vec4(p, 1.0);
-        vec3 localNormal = n;
-        #ifdef USE_INSTANCING
-          localPos = instanceMatrix * localPos;
-          localNormal = mat3(
-            instanceMatrix[0].xyz / wI,
-            instanceMatrix[1].xyz / hI,
-            instanceMatrix[2].xyz / dI
-          ) * n;
-        #endif
-        vec4 world = modelMatrix * localPos;
-        vWorldY = world.y;
-        vNormalW = normalize(mat3(modelMatrix) * localNormal);
-        vViewDir = normalize(cameraPosition - world.xyz);
-        vec4 mv = viewMatrix * world;
-        vDepth = -mv.z;
-        gl_Position = projectionMatrix * mv;
-      }
-    `,
-    fragmentShader: /* glsl */ `
-      uniform vec3 uColor, uSunColor, uLightColor, uRimColor;
-      uniform float uRim, uSun, uFogCap, uStrata, uFoot, uDesat, uBands, uSunPower;
-      ${KEY}
-      ${HEMI}
-      ${FOG}
-      varying vec3 vNormalW;
-      varying vec3 vViewDir;
-      varying float vDepth;
-      varying float vWorldY;
-      varying float vT;
-      varying float vSeed;
-      varying float vAngle;
-      void main() {
-        vec3 n = normalize(vNormalW);
-        float ndl = keyResponse(n);
-        float ramp = mix(floor(ndl * 3.0) / 3.0, ndl, 0.35);
-
-        // Rock is dark. It reads as rock because of what happens at its edges
-        // and its bedding, not because the body is modelled.
-        //
-        // No shadow lookup and no rim light out here, and both are deliberate:
-        // the shadow camera is fitted to the foreground island, and the rim is
-        // a light aimed at the cultivator. A range four hundred units away
-        // takes the sun and the sky and nothing else.
-        vec3 col = uColor * (hemisphere(n) + uLightColor * uSunPower * ramp * 0.85);
-
-        // Bedding planes: horizontal steps, stronger low down where the strata
-        // are thicker, and offset per instance so no two pillars share a seam.
-        float bed = fract(vT * (7.0 + floor(fract(vSeed * 3.9) * 6.0)) + vSeed * 4.7);
-        col *= 1.0 - uStrata * smoothstep(0.62, 0.98, bed) * (1.0 - vT * 0.55);
-
-        // Vertical fluting: the grooves that run a karst wall its whole height.
-        float flute = sin(vAngle * 7.0 + vSeed * 30.0) * 0.5 + 0.5;
-        col *= 1.0 - 0.12 * flute;
-
-        // The sun on the rock. Two terms, and it matters that they are separate:
-        //
-        //   the face — the whole sunward flank of the pillar takes warm light,
-        //     with a hard step where it turns away. This is what gives a range
-        //     its planes, and it is why a mountain reads as carved rather than
-        //     as cut from paper. A fresnel rim alone lights two pixels at the
-        //     silhouette and leaves the body dead flat.
-        //   the edge — a narrow bright line where the surface turns away from
-        //     the eye, which keeps a dark pillar from becoming a hole punched
-        //     in the sky.
-        float ndlRaw = dot(n, normalize(uLightDir));
-        float face = smoothstep(0.02, 0.42, ndlRaw);
-        col += uSunColor * uColor * face * uSun * 1.2;
-        float edge = pow(1.0 - max(dot(n, normalize(vViewDir)), 0.0), 2.4);
-        col += uSunColor * edge * smoothstep(-0.1, 0.5, ndlRaw) * uSun * 0.45;
-        col += uRimColor * edge * uRim * 0.30;
-
-        col = applyFogCapped(col, vDepth, uFogCap, vWorldY);
-        // The foot dissolves into the air, so the range stands *in* the cloud
-        // rather than being sliced off by whatever plane happens to be there.
-        col = mix(airAt(vWorldY), col, smoothstep(0.0, uFoot, vT));
-        col = mix(col, vec3(dot(col, ${LUMA3})), uDesat);
-        gl_FragColor = vec4(col, 1.0);
-      }
-    `,
+  const mat = new THREE.MeshStandardMaterial({
+    color: new THREE.Color(color),
+    roughness: 0.9,
+    metalness: 0,
+    flatShading: true,
+    transparent: false,
+    opacity: 1,
+    fog: false,
+    toneMapped: false,
   });
+
+  // Shared by reference, like every other material in this file: one realm
+  // transition re-lights the range without anything here being told.
+  const uniforms = {
+    uFogColor: env.uFogColor,
+    uFogHigh: env.uFogHigh,
+    uFogDensity: env.uFogDensity,
+    uLightDir: env.uLightDir,
+    uLightColor: env.uLightColor,
+    uDesat: env.uDesat,
+    uFogCap: { value: fogCap },
+    uSunEdge: { value: sunEdge },
+    uGain: { value: gain },
+  };
+  mat.userData.uniforms = uniforms;
+
+  mat.onBeforeCompile = (shader) => {
+    Object.assign(shader.uniforms, uniforms);
+
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', /* glsl */ `
+        #include <common>
+        varying float vWorldY;
+        #ifdef USE_INSTANCING
+          attribute float aFogCap;
+          varying float vFogCap;
+        #endif
+      `)
+      // After the projection, so `transformed` is final. World space is built
+      // here rather than taken from <worldpos_vertex>, which only emits a
+      // world position when some other chunk happens to need one.
+      .replace('#include <project_vertex>', /* glsl */ `
+        #include <project_vertex>
+        vec4 graniteWorld = vec4(transformed, 1.0);
+        #ifdef USE_INSTANCING
+          graniteWorld = instanceMatrix * graniteWorld;
+          vFogCap = aFogCap;
+        #endif
+        vWorldY = (modelMatrix * graniteWorld).y;
+      `);
+
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', /* glsl */ `
+        #include <common>
+        uniform float uFogCap, uSunEdge, uGain, uDesat;
+        uniform vec3 uLightDir, uLightColor;
+        ${FOG}
+        varying float vWorldY;
+        #ifdef USE_INSTANCING
+          varying float vFogCap;
+        #endif
+      `)
+      .replace('#include <opaque_fragment>', /* glsl */ `
+        #ifdef OPAQUE
+          diffuseColor.a = 1.0;
+        #endif
+        {
+          // "normal" here is three's own flat-shaded facet normal, in view
+          // space; vViewPosition points from the fragment back to the eye.
+          vec3 nV = normalize(normal);
+          vec3 eyeV = normalize(vViewPosition);
+          vec3 sunV = normalize(mat3(viewMatrix) * normalize(uLightDir));
+          float sun = dot(nV, sunV);
+
+          vec3 lit = outgoingLight * uGain;
+
+          // The hot edge, on the sun's side only. Where the sun is already flat
+          // on a face there is nothing to separate it from, so it is gated on
+          // facing the light rather than sprayed round every silhouette.
+          float edge = pow(1.0 - max(dot(nV, eyeV), 0.0), 3.2);
+          lit += uLightColor * edge * smoothstep(-0.10, 0.55, sun) * uSunEdge;
+
+          #ifdef USE_INSTANCING
+            float cap = vFogCap;
+          #else
+            float cap = uFogCap;
+          #endif
+          lit = applyFogCapped(lit, vViewPosition.z, cap, vWorldY);
+          lit = mix(lit, vec3(dot(lit, ${LUMA3})), uDesat);
+          gl_FragColor = vec4(lit, diffuseColor.a);
+        }
+      `);
+  };
+
+  // One shader, two shapes of it: the instanced ranks and the single ground
+  // mesh. Three's own key already separates them by USE_INSTANCING; this only
+  // stops a granite material sharing a program with an unpatched standard one.
+  mat.customProgramCacheKey = () => 'granite';
+  return mat;
 }
 
 /* ------------------------------------------------------------------- sky */

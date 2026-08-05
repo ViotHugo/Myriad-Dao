@@ -10,7 +10,7 @@ framework, no downloaded art. **~1035 KB total**, and installable as a PWA.
 
 ```bash
 npm run serve     # http://localhost:8123
-npm test          # 392 checks
+npm test          # 439 checks
 npm run balance   # assert the A18 pacing table
 npm run sheet     # 4 cameras × 4 skies -> screenshots/contact-sheet.png
 ```
@@ -28,13 +28,25 @@ Two timing minigames — the Heavenly Tribulation and the best-of-three duel —
 where **the width of the window on screen literally is the probability**, and
 the marker sweeps at constant speed so a tap lands inside exactly that often.
 
-Behind it all, the ten thousand peaks: three ranks of instanced karst spires
-rising out of a luminous sea of cloud, each pillar carved to its own silhouette
-in the vertex shader and crowned with pines that tell you how big it is. A plum
-tree buds and blooms and sheds with the stage you are on, cranes gather as your
-name spreads, a skein of birds crosses the range, and a waterfall widens with
-your sect's mine. The landscape is a readout — how many peaks stand clear of the
-cloud is your realm, and you can read it without looking at a single number.
+Behind it all, the range: fourteen granite peaks in three ranks, rising out of a
+luminous sea of cloud. Each one is a cylinder that has been broken — displaced
+by ridged simplex noise into vertical fracture, with two to four horizontal
+shelves snapped through it — and there are six of them, carved once and
+instanced, so no two peaks in the frame share a silhouette. One is a flat
+plateau with a pavilion on it, one a notched saddle, one a leaning spire, one a
+through-arch you can see the sky through. A plum tree buds and blooms and sheds
+with the stage you are on, cranes gather as your name spreads, a skein of birds
+crosses the range, and a waterfall widens with your sect's mine. The landscape is
+a readout — how many peaks stand clear of the cloud is your realm, and you can
+read it without looking at a single number.
+
+The ground under them is real now too: a subdivided plane displaced by
+low-frequency noise, whose far shore rises to a crest that stands in the sea of
+cloud. That is not decoration. A horizontal plane at this camera is foreshortened
+five to one, so *where the sea stops* was a ruled horizontal line across the
+picture that no amount of softening the fade could remove — the softness was
+being flattened by the projection. The sea has to end behind something, and now
+it ends behind a ridgeline.
 
 Below the skyline the valley is a sea of cloud in its own right: four horizontal
 layers at four heights, each scrolling on its own heading, each rolling on its
@@ -85,11 +97,14 @@ js/view3d/               Three.js: shaders, world, scenery, avatar, sect, effect
 js/view3d/camera-config.js   the locked camera — one object, no scattered literals
 js/view3d/time-of-day.js dawn, day, sunset, night — the sky, the air and the light
 js/view3d/cloud-plan.js  the sea of cloud as arithmetic: its tile, and where it sits
+js/view3d/peak-plan.js   the range as arithmetic: six meshes, and where fourteen stand
+js/view3d/terrain-plan.js the ground as arithmetic: the long section and its far shore
+js/view3d/noise.js       seeded 3D simplex, and the ridged fractal granite is carved from
 js/view3d/debug.js       the QA harness. Dev-only, dynamically imported, never shipped
 tools/contact-sheet.js   drives a headless browser to shoot the 16-frame sheet
 tools/balance-sim.js     plays the engine headlessly, checks pacing
 tools/make-icons.js      regenerates the PWA icons
-tests/run.js             392 checks
+tests/run.js             439 checks
 docs/DESIGN.md           art direction, performance budget, quality tiers, balance
 ```
 
