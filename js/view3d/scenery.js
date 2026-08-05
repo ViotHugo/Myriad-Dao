@@ -649,10 +649,12 @@ export function createScenery(env, tier) {
   /* ==================================================================== */
 
   function setPalette(p) {
-    // The peaks ramp, not the ridge ramp. The ridge colours are authored for
-    // valley walls seen against mist and run pale at the far end; borrowed for
-    // the skyline they made the furthest rank *lighter* than the air behind it,
-    // which reads as a smudge rather than as distance. See palette.js.
+    // The three aerial tiers — near, mid, far — derived from the realm's ink
+    // and the day's air by aerialTiers() in time-of-day.js. Never the ridge
+    // ramp: those colours are authored for valley walls seen against mist and
+    // run pale at the far end, and borrowed for the skyline they made the
+    // furthest rank *lighter* than the air behind it, which reads as a smudge
+    // rather than as distance.
     const ink = p.peaks || p.ridges;
     spireMats.forEach((m, i) => {
       m.uniforms.uColor.value.set(ink[Math.min(i, ink.length - 1)]);

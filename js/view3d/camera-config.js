@@ -106,16 +106,21 @@ const debugPresets = [
 ];
 
 /**
- * The four skies the contact sheet samples, as positions on the 0→1 scrubber.
- * They land exactly on authored palettes — dawn, the amber sunset, the starry
- * indigo, and the golden sea of cloud — rather than between them, so a cell
- * that looks wrong is a palette that is wrong and not an artefact of blending.
+ * The four times of day the contact sheet samples, as positions on the 0→1
+ * scrubber. They land exactly on the authored states in `time-of-day.js` —
+ * never between them — so a cell that looks wrong is a state that is wrong and
+ * not an artefact of blending. `tests/run.js` holds these to the same four
+ * positions the data model declares.
+ *
+ * Four cameras by four times is the sheet, and this is the axis that matters:
+ * every art call from stage 2 on is judged across a row, because a composition
+ * that only works at dusk is a coincidence.
  */
 const timesOfDay = [
   { id: 'dawn', label: 'dawn', t: 0 },
-  { id: 'dusk', label: 'dusk', t: 2 / 7 },
-  { id: 'night', label: 'night', t: 4 / 7 },
-  { id: 'gold', label: 'gold', t: 1 },
+  { id: 'day', label: 'day', t: 0.25 },
+  { id: 'sunset', label: 'sunset', t: 0.50 },
+  { id: 'night', label: 'night', t: 0.75 },
 ];
 
 export const CAMERA = {

@@ -18,7 +18,12 @@ import {
 } from '../js/engine.js';
 import { resolveTier, createWatchdog, TIERS } from '../js/view3d/quality.js';
 import { sceneryProgress } from '../js/view3d/progress.js';
-import { PALETTES, luminance, LUMA, mixHex, paletteAt } from '../js/view3d/palette.js';
+import {
+  PALETTES, luminance, LUMA, mixHex, desaturateHex, AURORA_COLOR,
+} from '../js/view3d/palette.js';
+import {
+  TIMES, timeOfDayAt, nearestTime, wrapDay, lerpDay, sunDirection, aerialTiers, AERIAL,
+} from '../js/view3d/time-of-day.js';
 import { CAMERA } from '../js/view3d/camera-config.js';
 import {
   FRAMINGS, REFERENCE_ASPECT, cameraBasis, frameOf, placeAtDepth, unitsPerFrame,
@@ -1392,75 +1397,153 @@ section('Palette — the ink-wash value ladder');
   // ended up borrowing the ridge ramp — which is authored against mist and runs
   // pale — and the furthest rank came out *lighter* than the sky behind it.
   // Nothing threw; the range simply stopped being a range.
+  //
+  // Since stage 2 the ladder is checked at *every* time of day, not just at the
+  // one each realm happens to stand at. That is the whole point of the day
+  // being data: the scrubber can put any realm under any sky, and a rank that
+  // only reads at dusk is a rank that is wrong.
   const names = PALETTES.map((_, i) => `realm ${i}`);
+  const DAY = Array.from({ length: 25 }, (_, i) => i / 24);
 
-  check('every realm carries the full lighting script', PALETTES.every((p) => (
-    Array.isArray(p.peaks) && p.peaks.length === 3
-    && typeof p.fog.high === 'string'
-    && p.sun && typeof p.sun.color === 'string' && typeof p.sun.power === 'number'
+  /**
+   * Every realm under every hour — the space the *scrubber* can reach. The
+   * ladder must at least point the right way everywhere in it, because QA looks
+   * at all of it.
+   */
+  const everywhere = (fn) => PALETTES.every((p) => DAY.every((t) => fn(p, timeOfDayAt(t))));
+
+  /**
+   * The space the game actually ships: each realm at its own hour, and every
+   * point along the transition to the next one — where the ink and the day ease
+   * together, exactly as index.js eases them. The full margins are held here.
+   */
+  const shipped = (fn) => PALETTES.every((p, i) => {
+    const q = PALETTES[Math.min(i + 1, PALETTES.length - 1)];
+    for (let s = 0; s <= 16; s++) {
+      const k = s / 16;
+      const blended = {
+        ink: mixHex(p.ink, q.ink, k),
+        cloud: mixHex(p.cloud, q.cloud, k),
+        cloudCrest: mixHex(p.cloudCrest, q.cloudCrest, k),
+      };
+      if (!fn(blended, timeOfDayAt(lerpDay(p.tod, q.tod, k)), i)) return false;
+    }
+    return true;
+  });
+
+  check('every realm carries the full ink script', PALETTES.every((p) => (
+    typeof p.ink === 'string' && /^#[0-9a-f]{6}$/.test(p.ink)
+    && typeof p.tod === 'number' && p.tod >= 0 && p.tod <= 1
+    && typeof p.bearing === 'number'
+    && Array.isArray(p.ridges) && p.ridges.length === 5
     && typeof p.cloud === 'string' && typeof p.cloudCrest === 'string'
+    && typeof p.water === 'string'
+    // No realm may carry a sky, a fog or a light colour any more. Two owners
+    // of the air is the fault this stage exists to remove, and the only way to
+    // keep it removed is to fail the suite when one grows back.
+    && p.sky === undefined && p.fog === undefined && p.light === undefined
+    && p.sun === undefined && p.accent === undefined
   )));
 
-  check('the peaks are ink: darker than the sky they stand against', (() => (
-    PALETTES.every((p) => {
+  check('the eight realms walk one day, in order', (() => {
+    // First light to daybreak, monotonically. The wheel comes round at
+    // Ascension — tod 1 and tod 0 are the same sky — so the last realm may
+    // land back on the first one's hour but nothing may go backwards.
+    const tods = PALETTES.map((p) => p.tod);
+    return tods[0] === 0 && tods[tods.length - 1] === 1
+      && tods.every((t, i) => i === 0 || t > tods[i - 1]);
+  })(), PALETTES.map((p) => p.tod).join(', '));
+
+  check('the peaks are ink: darker than the sky they stand against, at the realm\'s own hour',
+    shipped((p, tod) => {
       // The palest rank against the brightest thing it can be seen over. A
       // margin, not a tie: a few levels apart is a smudge, not a silhouette.
-      const palest = Math.max(...p.peaks.map(luminance));
-      return palest < luminance(p.sky.horizon) - 20 && palest < 130;
-    })
-  ))(), names.filter((_, i) => {
-    const p = PALETTES[i];
-    const palest = Math.max(...p.peaks.map(luminance));
-    return !(palest < luminance(p.sky.horizon) - 20 && palest < 130);
-  }).join(', '));
+      const palest = Math.max(...aerialTiers(p.ink, tod.horizon).map(luminance));
+      return palest < luminance(tod.horizon) - 20 && palest < 130;
+    }), names.filter((_, i) => !shipped((p, tod, at) => (
+      at !== i || Math.max(...aerialTiers(p.ink, tod.horizon).map(luminance))
+        < luminance(tod.horizon) - 20
+    ))).join(', '));
 
-  check('the ranks recede: near is darkest, far is palest', PALETTES.every((p) => {
-    const [a, b, c] = p.peaks.map(luminance);
+  check('and at every other hour the scrubber can put them under', everywhere((p, tod) => {
+    // Weaker on purpose, and still a real bar. A night sky is 54 levels top to
+    // bottom where a noon one is 220, so an absolute margin would either be
+    // meaningless at noon or unmeetable at midnight; this one is relative, and
+    // it is what keeps a range a range under any light QA points at it.
+    const air = luminance(tod.horizon);
+    const palest = Math.max(...aerialTiers(p.ink, tod.horizon).map(luminance));
+    return palest < air - Math.max(10, air * 0.12);
+  }));
+
+  check('the ranks recede: near is darkest, far is palest', everywhere((p, tod) => {
+    const [a, b, c] = aerialTiers(p.ink, tod.horizon).map(luminance);
     return a < b && b < c;
   }));
 
-  check('cloud is the brightest thing in the frame', PALETTES.every((p) => (
-    luminance(p.cloud) > Math.max(...p.peaks.map(luminance)) + 60
+  check('and they desaturate as they go, which is the other half of distance',
+    everywhere((p, tod) => {
+      // Lighter alone gives a range of pale versions of the same hue, which
+      // reads as closer mountains painted badly.
+      //
+      // Measured against the plain mix rather than in absolute chroma, because
+      // the air itself has a colour: mixing a neutral ink toward a sunset
+      // horizon *adds* saturation however hard you desaturate afterwards. What
+      // has to fall with distance is how much of its own colour the rank keeps.
+      const sat = (hex) => {
+        const n = parseInt(hex.slice(1), 16);
+        const ch = [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+        return Math.max(...ch) - Math.min(...ch);
+      };
+      // Against a *neutral* air, which isolates the mechanism from the air's
+      // own hue: whatever colour a rank of rock has, less of it survives the
+      // further away it is.
+      const grey = mixHex('#000000', '#ffffff', luminance(tod.horizon) / 255);
+      const tiers = aerialTiers(p.ink, grey).map(sat);
+      return tiers.every((v, i) => i === 0 || v <= tiers[i - 1] + 1);
+    }));
+
+  check('cloud is the brightest thing in the frame', shipped((p, tod) => (
+    luminance(p.cloud) > Math.max(...aerialTiers(p.ink, tod.horizon).map(luminance)) + 55
     && luminance(p.cloudCrest) > luminance(p.cloud)
-    && luminance(p.cloud) > luminance(p.sky.mid)
+    && luminance(p.cloud) > luminance(tod.zenith)
   )));
 
   check('cloud never glares out of a night sky', PALETTES.every((p) => (
-    // Bright relative to its own sky, not absolutely: at 175 against a sky of
-    // 58 the starry realms read as snowdrifts under a midday sun.
-    luminance(p.cloud) / luminance(p.sky.horizon) < 3.2
-  )));
-
-  check('the air is two colours, and the high air is the darker', PALETTES.every((p) => (
-    luminance(p.fog.high) < luminance(p.fog.color)
-  )));
+    // Bright relative to *its own* sky — the hour the realm actually stands at
+    // — not absolutely: at 175 against a sky of 58 the night realms read as
+    // snowdrifts under a midday sun.
+    luminance(p.cloud) / luminance(timeOfDayAt(p.tod).horizon) < 3.2
+  )), PALETTES.map((p, i) => (
+    `${i}: ${(luminance(p.cloud) / luminance(timeOfDayAt(p.tod).horizon)).toFixed(2)}×`
+  )).join(', '));
 
   check('no sun stands behind the camera', (() => (
     // The stage-1 gate: the sun has to be readable from a single glance at any
     // preset. A key within a few degrees of the lens is the flattest light
     // there is — nothing the camera sees is turned away from it, and every
     // shadow falls behind the thing that cast it, where it cannot be seen.
-    // Sixty degrees is the floor; most of these are near ninety.
-    PALETTES.every((p) => sunOffsetDeg(p.light.dir) >= 60)
-  ))(), PALETTES.map((p, i) => `${i}: ${sunOffsetDeg(p.light.dir).toFixed(0)}°`).join(', '));
-
-  check('no sun stands overhead either', PALETTES.every((p) => {
-    // Elevation, from the same numbers. Near the zenith a sun has no direction
-    // to read and casts no shadow long enough to see: 20°–50° is the band that
-    // rakes. It also has to be above the horizon at all, in every realm.
-    const [x, y, z] = p.light.dir;
-    const deg = (Math.atan2(y, Math.hypot(x, z)) * 180) / Math.PI;
-    return deg >= 20 && deg <= 50;
-  }), PALETTES.map((p, i) => {
-    const [x, y, z] = p.light.dir;
-    return `${i}: ${((Math.atan2(y, Math.hypot(x, z)) * 180) / Math.PI).toFixed(0)}°`;
-  }).join(', '));
+    // Sixty degrees is the floor; most of these are near ninety. Bearing is
+    // the realm's half of the sun, and it is measured with the elevation the
+    // day supplies — sunOffsetDeg ignores elevation, so any hour will do.
+    PALETTES.every((p) => sunOffsetDeg(sunDirection(p.bearing, 30)) >= 60)
+  ))(), PALETTES.map((p, i) => (
+    `${i}: ${sunOffsetDeg(sunDirection(p.bearing, 30)).toFixed(0)}°`
+  )).join(', '));
 
   check('the sun sweeps the sky rather than sitting in one corner', (() => {
     // Eight realms all keyed from the same bearing would be one lighting setup
     // wearing eight colour schemes. At least one has to come from behind.
-    const offs = PALETTES.map((p) => sunOffsetDeg(p.light.dir));
+    const offs = PALETTES.map((p) => sunOffsetDeg(sunDirection(p.bearing, 30)));
     return Math.max(...offs) > 140 && Math.max(...offs) - Math.min(...offs) > 50;
+  })());
+
+  check('the aurora is not the accent', (() => {
+    // A background element wearing the accent makes the player's own qi
+    // ordinary, and the curtains are the largest background element there is.
+    const src = readFileSync(new URL('../js/view3d/shaders.js', import.meta.url), 'utf8');
+    const sky = src.slice(src.indexOf('export function makeSkyMaterial'));
+    return typeof AURORA_COLOR === 'string'
+      && /uAuroraColor \* curtain/.test(sky) && !/uAccent/.test(sky);
   })());
 }
 
@@ -1848,16 +1931,17 @@ section('Camera lock — the contact sheet');
 
   check('the sheet walks the whole day', (() => {
     const ts = CAMERA.timesOfDay.map((t) => t.t);
-    return ts.length === 4 && ts[0] === 0 && ts[3] === 1
+    return ts.length === 4 && ts[0] === 0
       && ts.every((t, i) => i === 0 || t > ts[i - 1]);
   })());
 
-  check('each sampled time lands on an authored sky, not between two', (() => {
-    // A cell that looks wrong should be a palette that is wrong, not an
-    // artefact of blending — so every column sits exactly on a palette index.
-    const n = PALETTES.length - 1;
-    return CAMERA.timesOfDay.every((t) => Math.abs(t.t * n - Math.round(t.t * n)) < 1e-9);
-  })());
+  check('each sampled time lands on an authored state, not between two', (() => {
+    // A cell that looks wrong should be a time of day that is wrong, not an
+    // artefact of blending — so every column sits exactly on a TIMES entry,
+    // and the four columns are the four states in order.
+    return CAMERA.timesOfDay.length === TIMES.length
+      && CAMERA.timesOfDay.every((c, i) => c.t === TIMES[i].at && c.id === TIMES[i].id);
+  })(), CAMERA.timesOfDay.map((c) => `${c.id} ${c.t}`).join(', '));
 
   check('the plan is pure — no renderer, no DOM', (() => {
     const src = readFileSync(new URL('../js/view3d/framing.js', import.meta.url), 'utf8');
@@ -1916,40 +2000,215 @@ section('Camera lock — grayscale is true luminance');
   })());
 }
 
-section('Camera lock — the day as a dial');
+section('Stage 2 — the day as data');
 {
-  check('the dial ends on the first and last sky', (() => {
-    const a = paletteAt(0);
-    const b = paletteAt(1);
-    return a.sky.top === PALETTES[0].sky.top && b.sky.top === PALETTES[PALETTES.length - 1].sky.top;
+  const KEYS = ['zenith', 'horizon', 'sun', 'accent', 'rim',
+    'sunElevation', 'fogDensity', 'exposure', 'sunPower', 'stars', 'bloom'];
+
+  check('there are four authored states, and they are the four the brief names',
+    TIMES.length === 4
+    && TIMES.map((t) => t.id).join(',') === 'dawn,day,sunset,night'
+    && TIMES.map((t) => t.at).join(',') === '0,0.25,0.5,0.75');
+
+  check('every state carries every field', TIMES.every((t) => (
+    KEYS.every((k) => t[k] !== undefined)
+    && ['zenith', 'horizon', 'sun', 'accent', 'rim'].every((k) => /^#[0-9a-f]{6}$/.test(t[k]))
+    && KEYS.every((k) => typeof t[k] === 'string' || Number.isFinite(t[k]))
+  )));
+
+  check('the table is the brief\'s table', (() => {
+    // The one place the authored numbers are restated, so a nudge to any of
+    // them is a deliberate edit in two files rather than a drift in one.
+    const want = [
+      ['dawn', '#2b3a52', '#8fa3b8', '#e8d5c0', 6, 0.018, 0.90, '#9fe3d0'],
+      ['day', '#4a7ba8', '#cfe0ea', '#fff6e6', 55, 0.010, 1.10, '#8fe0c8'],
+      ['sunset', '#6b3f52', '#f0a860', '#ff9a4d', 4, 0.016, 1.00, '#ffd98a'],
+      ['night', '#0d1626', '#2a3752', '#cfe0ff', 40, 0.020, 0.75, '#7fd4ff'],
+    ];
+    return want.every(([id, zenith, horizon, sun, elev, fog, exp, accent], i) => {
+      const t = TIMES[i];
+      return t.id === id && t.zenith === zenith && t.horizon === horizon && t.sun === sun
+        && t.sunElevation === elev && t.fogDensity === fog && t.exposure === exp
+        && t.accent === accent;
+    });
   })());
 
-  check('it is clamped, not wrapped',
-    paletteAt(-3).sky.top === PALETTES[0].sky.top
-    && paletteAt(9).sky.top === PALETTES[PALETTES.length - 1].sky.top);
+  check('night is the one that brings stars, bloom and a blue rim', (() => {
+    const night = TIMES[3];
+    const others = TIMES.slice(0, 3);
+    // Bloom 0.55 at night against the day's 0.40, and a rim that is bluer than
+    // the moon lighting it — the sky is the only thing standing behind her.
+    const blue = (hex) => (parseInt(hex.slice(1), 16) & 255)
+      - ((parseInt(hex.slice(1), 16) >> 16) & 255);
+    return night.stars === 1 && night.bloom === 0.55
+      && others.every((t) => t.bloom === 0.40 && t.stars < 0.5)
+      && blue(night.rim) > blue(night.sun) && blue(night.rim) > 80;
+  })());
 
-  check('every stop on the dial is a whole palette', (() => {
-    const keys = Object.keys(PALETTES[0]).sort().join(',');
-    for (let i = 0; i <= 40; i++) {
-      const p = paletteAt(i / 40);
-      if (Object.keys(p).sort().join(',') !== keys) return false;
-      if (p.ridges.length !== 5 || p.peaks.length !== 3) return false;
-      if (!/^#[0-9a-f]{6}$/.test(p.cloud) || !/^#[0-9a-f]{6}$/.test(p.sky.horizon)) return false;
-      if (!Number.isFinite(p.fog.density) || p.light.dir.length !== 3) return false;
+  check('every value between two states is a lerp, and the shape never changes', (() => {
+    const shape = [...KEYS, 'below', 'fog'].sort().join(',');
+    for (let i = 0; i <= 96; i++) {
+      const t = timeOfDayAt(i / 96);
+      if (![...KEYS, 'below', 'fog'].every((k) => k in t)) return false;
+      if (KEYS.filter((k) => k in t).concat(['below', 'fog']).sort().join(',') !== shape) return false;
+      if (!/^#[0-9a-f]{6}$/.test(t.zenith) || !/^#[0-9a-f]{6}$/.test(t.horizon)) return false;
+      if (!Number.isFinite(t.fogDensity) || !Number.isFinite(t.exposure)) return false;
     }
     return true;
   })());
 
-  check('the value ladder survives everywhere between the skies', (() => {
-    // Blending is linear and luminance is linear in RGB, so a ladder that
-    // holds at both ends holds all the way across. Asserted, not assumed —
-    // this is the invariant the whole art direction stands on.
-    for (let i = 0; i <= 60; i++) {
-      const p = paletteAt(i / 60);
-      const palest = Math.max(...p.peaks.map(luminance));
-      if (!(luminance(p.cloud) > palest + 55)) return false;
-      if (!(luminance(p.cloudCrest) > luminance(p.cloud))) return false;
-      if (!(palest < luminance(p.sky.horizon))) return false;
+  check('nothing on the dial pops', (() => {
+    // The gate, as a number. Walk the whole day at a thousand steps and hold
+    // every field to a ceiling on how much it may move in one step — no field
+    // may jump more than about four times the average, which is what a
+    // hard-swap between two states would look like.
+    const N = 1000;
+    const at = (i) => timeOfDayAt(i / N);
+    const chan = (hex) => {
+      const n = parseInt(hex.slice(1), 16);
+      return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+    };
+    let worstColor = 0;
+    let worstNumber = 0;
+    for (let i = 0; i <= N; i++) {
+      const a = at(i);
+      const b = at(i + 1);
+      for (const k of ['zenith', 'horizon', 'sun', 'accent', 'rim', 'below']) {
+        const [ar, ag, ab] = chan(a[k]);
+        const [br, bg, bb] = chan(b[k]);
+        worstColor = Math.max(worstColor, Math.abs(ar - br), Math.abs(ag - bg), Math.abs(ab - bb));
+      }
+      for (const k of ['sunElevation', 'exposure', 'sunPower', 'stars', 'bloom']) {
+        // Relative to the field's own range, so degrees and exposures are
+        // judged on the same scale.
+        const span = Math.max(...TIMES.map((t) => t[k])) - Math.min(...TIMES.map((t) => t[k]));
+        if (span > 0) worstNumber = Math.max(worstNumber, Math.abs(a[k] - b[k]) / span);
+      }
+    }
+    // One step of a thousand across four states: 4/1000 of any range, plus a
+    // level of rounding on the colours.
+    return worstColor <= 2 && worstNumber <= 0.006;
+  })());
+
+  check('the dial is a circle: night runs back into dawn', (() => {
+    const a = timeOfDayAt(0.999);
+    const b = timeOfDayAt(0.0);
+    const near = (x, y) => Math.abs(x - y) < 0.02;
+    return timeOfDayAt(1).horizon === TIMES[0].horizon
+      && timeOfDayAt(-0.25).horizon === TIMES[3].horizon
+      && timeOfDayAt(1.25).horizon === TIMES[1].horizon
+      && near(a.exposure, b.exposure) && wrapDay(-0.1) === 0.9;
+  })());
+
+  check('easing the hour takes the short way round', (() => {
+    // Ascension stands at daybreak and rebirth returns to first light: the same
+    // sky, a distance of zero. Eased as a plain number that is a whole day run
+    // backwards in three seconds.
+    const stays = lerpDay(1.0, 0.0, 0.5) === 0 || wrapDay(lerpDay(1.0, 0.0, 0.5)) < 1e-9;
+    const forward = lerpDay(0.78, 1.0, 0.5);
+    const back = lerpDay(0.05, 0.95, 0.5);
+    return stays && Math.abs(forward - 0.89) < 1e-9 && Math.abs(back - 0.0) < 1e-9;
+  })());
+
+  check('the fog colour IS the horizon colour', (() => {
+    // Rule one of the whole stage, checked as identity rather than as
+    // closeness: distant geometry hazing toward anything else is a rectangle
+    // pasted on the sky. The renderer's half of this is asserted below.
+    for (let i = 0; i <= 40; i++) {
+      const t = timeOfDayAt(i / 40);
+      if (t.fog !== t.horizon) return false;
+    }
+    return true;
+  })());
+
+  check('the world paints scene.fog from that colour, and the shaders read it back', (() => {
+    const src = readFileSync(new URL('../js/view3d/world.js', import.meta.url), 'utf8');
+    const idx = readFileSync(new URL('../js/view3d/index.js', import.meta.url), 'utf8');
+    return /new THREE\.FogExp2\(/.test(src)
+      && /fog\.color\.copy\(cur\.horizon\)/.test(src)
+      && /fog\.density = cur\.density/.test(src)
+      && /env\.uFogColor\.value\.copy\(fog\.color\)/.test(src)
+      && /env\.uFogHigh\.value\.copy\(cur\.zenith\)/.test(src)
+      && /env\.uFogDensity\.value = fog\.density/.test(src)
+      && /scene\.fog = world\.fog/.test(idx);
+  })());
+
+  check('the sun is the realm\'s bearing and the day\'s elevation', (() => {
+    const dir = sunDirection(-52, 6);
+    const elev = (Math.atan2(dir[1], Math.hypot(dir[0], dir[2])) * 180) / Math.PI;
+    const bearing = (Math.atan2(dir[0], dir[2]) * 180) / Math.PI;
+    const unit = Math.abs(Math.hypot(...dir) - 1) < 1e-12;
+    return unit && Math.abs(elev - 6) < 1e-9 && Math.abs(bearing + 52) < 1e-9;
+  })());
+
+  check('every hour puts the sun above the horizon and out of the zenith',
+    TIMES.every((t) => t.sunElevation >= 3 && t.sunElevation <= 60),
+    TIMES.map((t) => `${t.id}: ${t.sunElevation}°`).join(', '));
+
+  check('the day is the only thing that decides exposure and bloom', (() => {
+    // One dial each, both read off the world's own eased values, so neither can
+    // step while the sky is still fading.
+    const idx = readFileSync(new URL('../js/view3d/index.js', import.meta.url), 'utf8');
+    const post = readFileSync(new URL('../js/view3d/post.js', import.meta.url), 'utf8');
+    return /renderer\.toneMappingExposure = world\.atmosphere\.exposure/.test(idx)
+      && /post\.setBloomStrength\(world\.atmosphere\.bloom\)/.test(idx)
+      && /function setBloomStrength/.test(post)
+      && /uExposure\.value = renderer\.toneMappingExposure/.test(post);
+  })());
+
+  check('the character\'s rim light is the day\'s, not the sun\'s', (() => {
+    const src = readFileSync(new URL('../js/view3d/lighting.js', import.meta.url), 'utf8');
+    return /rim\.color\.copy\(cur\.rimColor\)/.test(src)
+      && /sun\.color\.copy\(cur\.sunColor\)/.test(src);
+  })());
+
+  check('nearestTime names the hour, wrapping at both ends',
+    nearestTime(0.01).id === 'dawn' && nearestTime(0.99).id === 'dawn'
+    && nearestTime(0.26).id === 'day' && nearestTime(0.74).id === 'night');
+}
+
+section('Stage 2 — aerial perspective, as three material tiers');
+{
+  check('there are three tiers and they recede', (() => (
+    AERIAL.length === 3
+    && AERIAL.map((t) => t.id).join(',') === 'near,mid,far'
+    && AERIAL.every((t, i) => i === 0 || (
+      t.air > AERIAL[i - 1].air && t.desat > AERIAL[i - 1].desat
+      && t.fogCap > AERIAL[i - 1].fogCap && t.sun < AERIAL[i - 1].sun
+    ))
+  ))());
+
+  check('a tier is lighter than the one in front of it, for any ink and any air', (() => {
+    for (const ink of ['#000000', '#1b2129', '#2a1a1e', '#3a4a2a', '#ffffff']) {
+      for (const t of [0, 0.17, 0.25, 0.5, 0.63, 0.75, 0.9]) {
+        const air = timeOfDayAt(t).horizon;
+        const [a, b, c] = aerialTiers(ink, air).map(luminance);
+        const toward = luminance(ink) < luminance(air);
+        if (toward ? !(a < b && b < c) : !(a > b && b > c)) return false;
+      }
+    }
+    return true;
+  })());
+
+  check('and never darker than the air it stands in', (() => (
+    PALETTES.every((p) => {
+      for (let i = 0; i <= 24; i++) {
+        const air = timeOfDayAt(i / 24).horizon;
+        const palest = Math.max(...aerialTiers(p.ink, air).map(luminance));
+        if (palest >= luminance(air)) return false;
+      }
+      return true;
+    })
+  ))());
+
+  check('desaturation keeps a colour\'s value', (() => {
+    // The whole reason the tiers can be derived rather than authored: pulling a
+    // colour toward its own grey cannot move it up or down the value ladder,
+    // so only the deliberate mix toward the air does.
+    for (const hex of ['#2a1a1e', '#0d2a30', '#f0a860', '#7fd4ff']) {
+      for (const k of [0, 0.12, 0.4, 1]) {
+        if (Math.abs(luminance(desaturateHex(hex, k)) - luminance(hex)) > 1.5) return false;
+      }
     }
     return true;
   })());
@@ -1961,10 +2220,97 @@ section('Camera lock — the day as a dial');
 
   check('a midpoint mix is the midpoint', mixHex('#000000', '#ffffff', 0.5) === '#808080');
 
-  check('the scrubber never repaints while the game owns the sky', (() => {
-    const src = readFileSync(new URL('../js/view3d/index.js', import.meta.url), 'utf8');
-    return /timeOverride/.test(src) && /if \(timeOverride !== null\) return;/.test(src);
+  check('the three ranks are wired to the derived tiers, not to an authored ramp', (() => {
+    const idx = readFileSync(new URL('../js/view3d/index.js', import.meta.url), 'utf8');
+    const scn = readFileSync(new URL('../js/view3d/scenery.js', import.meta.url), 'utf8');
+    return /aerialTiers\(p\.ink, tod\.horizon\)/.test(idx)
+      && /const ink = p\.peaks/.test(scn)
+      && scn.includes('fogCap: 0.22') && scn.includes('fogCap: 0.60');
   })());
+
+  check('only the ink shaders apply the air', (() => {
+    // scene.fog exists now, and three applies it to any stock material that
+    // does not opt out. There are exactly two of those in the renderer, and a
+    // third one appearing would be a second opinion about the air.
+    const files = ['effects.js', 'avatar.js', 'sect.js', 'scenery.js', 'world.js'];
+    return files.every((f) => {
+      const src = readFileSync(new URL(`../js/view3d/${f}`, import.meta.url), 'utf8');
+      const stock = src.match(/new THREE\.(Line|Points|Sprite|Mesh)[A-Za-z]*Material\(\{[^}]*\}/g) || [];
+      return stock.every((m) => /fog: false/.test(m));
+    });
+  })());
+
+  check('the scrubber never repaints while the game owns the hour', (() => {
+    const src = readFileSync(new URL('../js/view3d/index.js', import.meta.url), 'utf8');
+    return /dayOverride/.test(src) && /if \(dayOverride !== null\) return;/.test(src);
+  })());
+}
+
+section('Stage 2 — the sky sphere');
+{
+  const shaders = readFileSync(new URL('../js/view3d/shaders.js', import.meta.url), 'utf8');
+  const sky = shaders.slice(
+    shaders.indexOf('export function makeSkyMaterial'),
+    shaders.indexOf('/* --------------------------------------------------------------- ridges */'),
+  );
+  const post = shaders.slice(shaders.indexOf('export function makePostMaterial'));
+  const world = readFileSync(new URL('../js/view3d/world.js', import.meta.url), 'utf8');
+
+  check('it is a BackSide sphere with a ShaderMaterial on it',
+    /side: THREE\.BackSide/.test(sky) && /new THREE\.ShaderMaterial/.test(sky)
+    && /new THREE\.SphereGeometry\(760, 64, 32\)/.test(world));
+
+  check('three stops: zenith, horizon, below-horizon', (() => (
+    /uZenith/.test(sky) && /uHorizon/.test(sky) && /uBelow/.test(sky)
+    && /mix\(uHorizon, uZenith/.test(sky) && /mix\(col, uBelow/.test(sky)
+    // and no fourth: the old top/mid pair is gone
+    && !/uTop|uMid\b/.test(sky)
+  ))());
+
+  check('the sun disc is a smoothstep on dot(viewDir, sunDir), with a wide halo',
+    /float cosA = dot\(d, normalize\(uSunDir\)\)/.test(sky)
+    && /smoothstep\(DISC_COS - DISC_SOFT, DISC_COS \+ DISC_SOFT, cosA\)/.test(sky)
+    && /smoothstep\(HALO_COS, 1\.0, cosA\)/.test(sky));
+
+  check('there is no hardcoded moon left in it', (() => (
+    // A set piece lit for one hour of one realm is exactly what this stage
+    // exists to remove. The moon is the night's sun, at the night's direction.
+    !/uMoon/.test(shaders) && !/vec3 md = normalize/.test(sky)
+  ))());
+
+  check('the dither is per pixel, one 255th, and the last thing in the pipeline', (() => {
+    // In the post pass, not in the sky: the staircase appears where the frame
+    // is quantised to eight bits, and that is the only place where 1/255 is a
+    // step. A flat 1/255 of *linear* light in the sky shader would be half a
+    // step at noon and seven steps of visible noise at midnight.
+    const line = 'col += (hash21(gl_FragCoord.xy) - 0.5) / 255.0;';
+    return post.includes(line)
+      && post.indexOf(line) > post.indexOf('uGrayscale > 0.0')
+      && post.indexOf(line) < post.indexOf('gl_FragColor = vec4(col, 1.0)')
+      && !/gl_FragCoord/.test(sky);
+  })());
+
+  check('nothing else is laid over the sky', (() => {
+    // No fbm in the base gradient — the noise that is left is the aurora, the
+    // golden sea and the storm, all of which are flagged off in a plain sky.
+    const base = sky.slice(sky.indexOf('vec3 d = normalize(vRay)'), sky.indexOf('if (uAurora > 0.0)'));
+    return !/fbm\(/.test(base);
+  })());
+
+  check('the fabric striping is gone from the post pass', (() => {
+    // Two anisotropic fbm octaves — one stretched along x, one along y — is a
+    // weave, and a weave over a flat sky is a sheet hanging behind the
+    // mountains. The isotropic paper tooth stays.
+    return !/float fibre/.test(post) && /float tooth = hash21/.test(post)
+      && !/fbm\(vec2\(px\.x \* 0\.016/.test(post);
+  })());
+
+  check('the sky reads its direction per fragment, not off the vertex position', (() => (
+    // normalize(position) on a coarse sphere interpolates a chord where it
+    // wants an arc, which steps the gradient once per segment: a vertical seam
+    // every 11 degrees across the one surface with nothing else on it.
+    /vRay = world\.xyz - cameraPosition/.test(sky) && !/vDir = normalize\(position\)/.test(sky)
+  ))());
 }
 
 section('Camera lock — the harness ships to nobody');

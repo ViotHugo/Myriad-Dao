@@ -17,12 +17,15 @@
 //   S  safe zones — the bottom 30% belongs to the UI and the top 12% to the
 //      status bar. Anything composed into those bands is composed into a place
 //      the player cannot see.
-//   T  the day as a dial — eight skies, continuously. A composition that only
-//      works at dusk is not a composition, it is a coincidence.
+//   T  the day as a dial — dawn, day, sunset, night and round again,
+//      continuously, with the realm's own ink held still underneath it. A
+//      composition that only works at dusk is not a composition, it is a
+//      coincidence, and this is the key that says which one you have.
 //   C  four fixed cameras — the same shot every time, so two builds can be put
 //      side by side and the difference is the build.
 //
-// And the contact sheet: four cameras × four skies, sixteen frames, one image.
+// And the contact sheet: four cameras × four times of day, sixteen frames, one
+// image.
 // That is the artefact a gate is argued over.
 //
 // main.js imports this module dynamically and only when the harness is asked
@@ -242,7 +245,12 @@ export function createDebugPanel({ view, doc = document, win = window } = {}) {
       flag(s.grayscale, 'G gray'), flag(s.wireframe, 'W wire'), flag(state.safe, 'S safe'),
       flag(state.scrub, `T ${state.scrub ? time.toFixed(2) : 'off'}`),
       flag(state.preset >= 0, `C ${state.preset < 0 ? 'game' : CAMERA.debugPresets[state.preset].label}`),
-    ].join(' · ');
+    ].join(' · ')
+      // The day, always — the hour is the axis every art call after stage 2 is
+      // judged across, so it is on screen whether QA is holding it or not.
+      + `<div class="mdbg-k">day <b>${s.dayName}</b> ${s.day.toFixed(3)}`
+      + ` · exp ${s.exposure.toFixed(2)} · fog ${s.fogDensity.toFixed(4)}`
+      + ` · realm ${s.realm}</div>`;
 
     if (!safe.hidden) {
       horizonEl.style.top = `${c.horizonV * 100}%`;

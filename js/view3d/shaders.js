@@ -42,12 +42,18 @@ export const NOISE = /* glsl */ `
 
 // Aerial perspective, applied by hand so it matches the sky gradient exactly.
 //
-// Air is not one colour. Mixing every distant surface toward a single grey is
-// what flattens a landscape into a decal: a summit high in the frame and a foot
-// down in the valley converge on the same value, and the range stops sitting
-// *in* anything. Real air is bright and warm along the skyline and colder
-// overhead, so `airAt` returns the colour of the air at a given world height and
-// everything hazes toward that instead.
+// "Exactly" is the whole of it. `uFogColor` is the day's **horizon** colour and
+// `uFogHigh` is its **zenith** — the same two values the sky sphere is drawn
+// with and the same colour `scene.fog` carries, all read from one time-of-day
+// object. Air that is merely close to the colour of the sky it stands in is
+// what makes distant geometry read as a rectangle pasted onto the horizon;
+// there is no second opinion about the air anywhere in this renderer.
+//
+// Air is not one colour, either. Mixing every distant surface toward a single
+// grey is what flattens a landscape into a decal: a summit high in the frame
+// and a foot down in the valley converge on the same value, and the range stops
+// sitting *in* anything. So `airAt` walks from the skyline colour to the zenith
+// colour with world height, which is what you are actually looking through.
 //
 // `cap` is the most haze a surface is allowed to take. Exponential-squared fog
 // is total by about 400 units, which is right for mist and wrong for a range of
@@ -55,8 +61,8 @@ export const NOISE = /* glsl */ `
 // leaves it a few percent darker than the air it stands in, which is the whole
 // of how depth reads in a painting with no texture and no atmosphere model.
 export const FOG = /* glsl */ `
-  uniform vec3 uFogColor;   // air along the skyline — the bright end
-  uniform vec3 uFogHigh;    // air up where the summits are
+  uniform vec3 uFogColor;   // the day's horizon: air along the skyline
+  uniform vec3 uFogHigh;    // the day's zenith: air up where the summits are
   uniform float uFogDensity;
 
   vec3 airAt(float worldY) {
@@ -567,63 +573,110 @@ export function makeRockMaterial(env, {
 
 /* ------------------------------------------------------------------- sky */
 
-/** A vertical three-stop gradient with optional stars, moon, aurora, clouds. */
+/**
+ * The sky sphere: three stops, one disc, and nothing else.
+ *
+ * ---------------------------------------------------------------------------
+ * What this is, and what was deliberately taken off it
+ *
+ * A backdrop is the largest surface in the frame and the one thing every other
+ * value is judged against, so it is built out of as few decisions as possible:
+ *
+ *   - a **three-stop vertical gradient**, zenith → horizon → below-horizon,
+ *     all three read from the time-of-day object and nothing else;
+ *   - a **sun or moon disc** at the key light's own direction, with a wide soft
+ *     halo, so the light in the picture and the light in the sky are the same
+ *     light;
+ *   - nothing else. The per-pixel dither that keeps a gradient this shallow
+ *     from banding lives at the end of the post pass, where the frame is
+ *     actually quantised — see the bottom of makePostMaterial;
+ *   - stars, and the two realm set-dressings (aurora, golden sea).
+ *
+ * There is **no texture on the sky**. The fabric-like vertical striping that
+ * used to lie over it came from the post pass' paper fibre and is gone from
+ * there (see makePostMaterial); the faint vertical seams that survived that
+ * came from reading the gradient off `normalize(position)` on a 32-segment
+ * sphere, which interpolates a chord where it wants an arc and steps the
+ * gradient once per segment. The direction is per-fragment from the camera now,
+ * and world.js builds the sphere at twice the resolution.
+ *
+ * The hardcoded moon is gone too. It hung at a fixed direction — a set piece
+ * lit for one hour of one realm — which is exactly the thing this stage exists
+ * to stop: the moon is the night's sun now, drawn by the same three lines at
+ * the same place the key light stands.
+ * ---------------------------------------------------------------------------
+ */
 export function makeSkyMaterial(env) {
   return new THREE.ShaderMaterial({
     side: THREE.BackSide,
     depthWrite: false,
     uniforms: envUniforms(env, {
-      uTop: { value: new THREE.Color('#12161d') },
-      uMid: { value: new THREE.Color('#2b3440') },
-      uHorizon: { value: new THREE.Color('#5b6472') },
+      // The three stops. All three come from time-of-day.js; `below` is derived
+      // there rather than here so the fog, the sky and the water cannot each
+      // invent their own version of the same colour.
+      uZenith: { value: new THREE.Color('#2b3a52') },
+      uHorizon: { value: new THREE.Color('#8fa3b8') },
+      uBelow: { value: new THREE.Color('#6e7c96') },
+      // The disc, at the key light's direction. `uSunColor` is the day's sun —
+      // or its moon, which is the same field with a colder colour in it.
+      uSunColor: { value: new THREE.Color('#e8d5c0') },
+      uSunDir: { value: new THREE.Vector3(0.4, 0.1, 0.55).normalize() },
       uStars: { value: 0 },
       uAurora: { value: 0 },
-      uMoon: { value: 0 },
+      uAuroraColor: { value: new THREE.Color('#4fe8c4') },
       uCloudSea: { value: 0 },
-      uAccent: { value: new THREE.Color('#35c98e') },
       uStorm: { value: 0 },
     }),
     vertexShader: /* glsl */ `
-      varying vec3 vDir;
+      varying vec3 vRay;
       void main() {
-        vDir = normalize(position);
-        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        // The ray from the eye, not the vertex normal. On a coarse sphere those
+        // are different things, and the difference is a visible seam once per
+        // segment across a gradient this shallow.
+        vec4 world = modelMatrix * vec4(position, 1.0);
+        vRay = world.xyz - cameraPosition;
+        gl_Position = projectionMatrix * viewMatrix * world;
       }
     `,
     fragmentShader: /* glsl */ `
-      uniform vec3 uTop, uMid, uHorizon, uAccent, uFogColor;
-      uniform float uStars, uAurora, uMoon, uCloudSea, uTime, uStorm, uDesat;
+      uniform vec3 uZenith, uHorizon, uBelow, uSunColor, uSunDir, uAuroraColor;
+      uniform float uStars, uAurora, uCloudSea, uTime, uStorm, uDesat;
       ${NOISE}
-      varying vec3 vDir;
+      varying vec3 vRay;
+
+      // The disc, as two angles. A cosine rather than a distance because that
+      // is what a dot product already is, and because it stays exact when the
+      // sun is nearly overhead.
+      const float DISC_COS = 0.999781;   // cos(1.2°) — the disc's edge
+      const float DISC_SOFT = 0.00012;   // ~0.4° of softness on that edge
+      const float HALO_COS = 0.788;      // cos(38°) — a wide, soft halo
+      const float DISC_POWER = 2.8;      // linear light: the disc is allowed to blow
+
       void main() {
-        vec3 d = normalize(vDir);
+        vec3 d = normalize(vRay);
+
         // The bright stop belongs AT the horizon (d.y ~ 0), not at the nadir:
         // a dawn glows along the skyline and darkens toward the zenith.
         //
-        // The stops are packed hard against the skyline because of what the
-        // authored camera actually sees. It looks out and slightly *down* from
-        // a high shelf, so the top of the frame is only about eight degrees
-        // above horizontal — d.y never exceeds 0.14. Spread over the 0..0.8
-        // that a sky dome usually wants, the entire visible band came out as a
-        // single pale grey a few levels wide, the palette's top stop was never
-        // reached in play, and the picture lost its darkest field. Compressed to
-        // here, the same three stops give a hundred levels of gradient inside
-        // the frame the game is composed for.
-        vec3 col;
-        if (d.y >= 0.0) {
-          col = mix(uHorizon, uMid, smoothstep(-0.010, 0.175, d.y));
-          col = mix(col, uTop, smoothstep(0.100, 0.420, d.y));
-        } else {
-          // Below the skyline the dome is not sky, it is the far air of the
-          // valley seen through everything else. Keeping it in the haze colour
-          // gives the cloud and the ranges something bright to stand in.
-          col = mix(uHorizon, uFogColor, smoothstep(0.0, -0.10, d.y));
-        }
-        float h = clamp(d.y * 0.5 + 0.5, 0.0, 1.0);
+        // The band is pitched at what the locked camera can actually see. A 45°
+        // lens with the horizon at v = 0.45 puts the top of the frame about 20°
+        // above horizontal — d.y ~ 0.34 — and the set-piece framings widen that
+        // to about 25°. Spread over the 0..0.8 a sky dome usually wants, the
+        // whole visible band would come out as one pale grey a few levels wide
+        // and the zenith colour would never be reached in play; the exponent
+        // packs more of the change into the low sky, where the composition is.
+        float up = smoothstep(0.0, 0.46, d.y);
+        vec3 col = mix(uHorizon, uZenith, pow(up, 0.78));
+
+        // Below the skyline the dome is not sky, it is the far air of the
+        // valley seen through everything else. It is the horizon colour with a
+        // little of the zenith in it, so the lower third of the frame recedes
+        // instead of standing there as one flat plate behind the ranges.
+        col = mix(col, uBelow, smoothstep(0.0, -0.12, d.y));
 
         // Stars: a sparse hash field that twinkles, fading out near the horizon.
-        // The fade is over the same compressed band — pitched at the old 0.05
-        // to 0.5 it left the starry realms with about a tenth of a star.
+        // Driven by the day, not by the realm — they come up through dusk and
+        // are still faintly there at first light.
         if (uStars > 0.0) {
           vec2 sp = d.xz / max(abs(d.y) + 0.25, 0.05) * 6.0;
           float s = hash21(floor(sp * 40.0));
@@ -632,23 +685,23 @@ export function makeSkyMaterial(env) {
           col += vec3(0.9, 0.95, 1.0) * star * tw * uStars * smoothstep(0.004, 0.075, d.y);
         }
 
-        // The great moon of Spirit Severing.
-        if (uMoon > 0.0) {
-          // Low enough to sit inside the authored frame, and small enough to
-          // read as a moon rather than a blown-out lamp.
-          // Low enough to rise from behind the far ranges, and with a halo
-          // tight enough to read as a moon instead of an overexposed lamp.
-          vec3 md = normalize(vec3(-0.52, 0.062, -0.86));
-          float dd = distance(d, md);
-          float disc = smoothstep(0.048, 0.036, dd);
-          float rim  = smoothstep(0.060, 0.046, dd) - disc;
-          float halo = smoothstep(0.185, 0.0, dd);
-          col += vec3(0.52, 0.58, 0.70) * halo * halo * 0.20 * uMoon;
-          col = mix(col, vec3(0.80, 0.80, 0.74), disc * 0.85 * uMoon);
-          col += vec3(0.26, 0.29, 0.34) * rim * uMoon;
-        }
+        // The sun, or the moon: one disc at the key light's own bearing and
+        // elevation. At noon and at midnight it stands above the top of the
+        // frame and only the halo is in shot, which is correct — a camera
+        // pointed at a mountain range does not have the noon sun in it.
+        float cosA = dot(d, normalize(uSunDir));
+        float halo = smoothstep(HALO_COS, 1.0, cosA);
+        // The halo is authored *relative to the sky it sits in*. An absolute
+        // one is a floodlight at night and invisible at noon: the night sky is
+        // two percent of the day sky in linear light, so a glow that reads as a
+        // moon there would be nothing at all six hours later.
+        col += uSunColor * halo * halo * 0.22 * (0.35 + dot(col, ${LUMA3}) * 2.0);
+        float disc = smoothstep(DISC_COS - DISC_SOFT, DISC_COS + DISC_SOFT, cosA);
+        col = mix(col, uSunColor * DISC_POWER, disc);
 
-        // Aurora: vertical curtains of accent light, slowly breathing.
+        // Aurora: vertical curtains, slowly breathing. In the realm's own green
+        // and never in the accent — the accent is the player's qi, and a sky
+        // wearing it makes her light ordinary.
         if (uAurora > 0.0) {
           // Curtains hang from just above the skyline into the low sky — the
           // band the player can actually see — and fade out before the zenith.
@@ -656,7 +709,7 @@ export function makeSkyMaterial(env) {
           float height = smoothstep(0.01, 0.10, d.y) * smoothstep(0.62, 0.20, d.y);
           float curtain = smoothstep(0.40, 0.80, band) * height;
           float ripple = 0.65 + 0.35 * sin(d.x * 22.0 + uTime * 0.5);
-          col += uAccent * curtain * 0.85 * ripple * uAurora;
+          col += uAuroraColor * curtain * 0.85 * ripple * uAurora;
           col += vec3(0.30, 0.70, 0.95) * curtain * 0.35 * uAurora;
         }
 
@@ -681,6 +734,14 @@ export function makeSkyMaterial(env) {
         }
 
         col = mix(col, vec3(dot(col, ${LUMA3})), uDesat);
+
+        // The dither that keeps this gradient from banding is not here — it is
+        // the last line of makePostMaterial, and it has to be. Everything this
+        // shader writes is linear light with no ceiling; the staircase appears
+        // when the frame is encoded to eight bits, four passes later, and
+        // "one 255th" only means one step at that point. Dithering by a flat
+        // 1/255 of *linear* here would be half a step at noon and seven steps
+        // of visible noise in a night sky.
         gl_FragColor = vec4(col, 1.0);
       }
     `,
@@ -1286,15 +1347,22 @@ export function makePostMaterial() {
         // touching either end.
         col = mix(col, col * col * (3.0 - 2.0 * col), uContrast);
 
-        // Paper: long fibres one way, a fine tooth the other. Static, not noise
-        // that crawls — crawling grain reads as video, not paper. Kept faint:
-        // laid on heavily it is a veil over the whole picture, and a veil is
-        // indistinguishable from being out of focus.
-        float fibre = fbm(vec2(px.x * 0.016, px.y * 0.42)) * 0.6
-                    + fbm(vec2(px.x * 0.38, px.y * 0.018)) * 0.4;
+        // Paper: the tooth, and only the tooth. Static, not noise that crawls —
+        // crawling grain reads as video, not paper. Kept faint: laid on heavily
+        // it is a veil over the whole picture, and a veil is indistinguishable
+        // from being out of focus.
+        //
+        // The two *fibre* octaves that used to sit here are gone. They were two
+        // anisotropic fbms — one stretched along x, one along y — which is a
+        // woven texture, and a woven texture over a flat sky is a sheet of
+        // fabric hanging behind the mountains. It cost nothing to see on the
+        // rock, where there is form to hide it, and it was the most obvious
+        // thing in the frame everywhere the picture was smooth. The sky owns its
+        // own smoothness now (a dither, in makeSkyMaterial), and nothing is laid
+        // over it.
         float tooth = hash21(floor(px * 1.6));
-        col *= 1.0 - uGrain * (0.55 * (1.0 - fibre) + 0.45 * (1.0 - tooth));
-        col += uGrain * 0.05 * fibre;
+        col *= 1.0 - uGrain * (1.0 - tooth);
+        col += uGrain * 0.05 * tooth;
 
         // The heavens taking the light out of the world. Applied before the
         // flash so a successful strike still blows the frame white.
@@ -1329,6 +1397,23 @@ export function makePostMaterial() {
           float luma = dot(col, vec3(${LUMA[0]}, ${LUMA[1]}, ${LUMA[2]}));
           col = mix(col, vec3(luma), clamp(uGrayscale, 0.0, 1.0));
         }
+
+        // Dither, per pixel, dead last — after the grayscale, because this is
+        // about the eight bits the frame is about to be written into and
+        // nothing else.
+        //
+        // The sky is a gradient of perhaps sixty levels spread over eight
+        // hundred pixels of phone screen. Quantised straight it comes out as a
+        // staircase of flat bands ten pixels deep, and it gets *worse* the
+        // better the sky gets, because a smoother ramp means wider bands. A
+        // night sky was holding one level for forty rows at a time.
+        //
+        // Half a step of white noise breaks the step boundary into a dither
+        // pattern the eye integrates back to the value that was asked for. It
+        // belongs here and only here: this is the one line in the renderer
+        // where the picture stops being light and becomes a number between 0
+        // and 255, so this is the one place where 1/255 is a step.
+        col += (hash21(gl_FragCoord.xy) - 0.5) / 255.0;
 
         gl_FragColor = vec4(col, 1.0);
       }

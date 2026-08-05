@@ -79,6 +79,11 @@ export function createEffects(env, tier) {
   boltGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(BOLT_POINTS * 3), 3));
   const boltMat = new THREE.LineBasicMaterial({
     color: 0xffffff, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false,
+    // The only two stock materials in the renderer are this and the meridian
+    // filament, and both opt out of `scene.fog`: everything else does its own
+    // aerial perspective in the shader, and a bolt of heavenly lightning tinted
+    // 7% toward the skyline is not an improvement on one that is not.
+    fog: false,
   });
   const bolt = new THREE.Line(boltGeo, boltMat);
   bolt.frustumCulled = false;
