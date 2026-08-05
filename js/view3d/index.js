@@ -340,7 +340,7 @@ export function createView({ canvas, onTap, onDoubleTap, settings, debug = false
   // Counts that are baked into geometry at construction time. Changing any of
   // them means the scene has to be rebuilt, not just re-sized.
   const GEOMETRY_KEYS = ['mistBands', 'ridgeLayers', 'qiMotes', 'sparks', 'disciples', 'floatSwords',
-    'water', 'stars', 'spires', 'cloudDecks', 'cloudLayers', 'plumDepth', 'blossoms', 'petals',
+    'water', 'stars', 'peaks', 'cloudDecks', 'cloudLayers', 'plumDepth', 'blossoms', 'petals',
     'cranes', 'waterfall', 'bamboo', 'fireflies'];
 
   function rebuildScene() {

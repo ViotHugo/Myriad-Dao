@@ -33,6 +33,13 @@ import {
   FRAMINGS, REFERENCE_ASPECT, cameraBasis, frameOf, placeAtDepth, unitsPerFrame,
   horizonV, composition, contactSheetPlan, sunOffsetDeg,
 } from '../js/view3d/framing.js';
+import { makeNoise3, ridged3 } from '../js/view3d/noise.js';
+import {
+  PEAK_MESHES, SCALE_RANGE, peakPlacements, cloudBands,
+} from '../js/view3d/peak-plan.js';
+import {
+  TERRAIN, TARN, SHORE, terrainField, terrainHeight, crestAt,
+} from '../js/view3d/terrain-plan.js';
 import { debugEnabled } from '../js/view3d/dev-flag.js';
 import { mulberry32, seededRandom } from '../js/rng.js';
 import { fmt, fmtTime } from '../js/format.js';
@@ -2604,6 +2611,391 @@ section('Stage 3 — the sea as it is drawn');
     const sw = readFileSync(new URL('../sw.js', import.meta.url), 'utf8');
     return sw.includes("'./js/view3d/cloud-sea.js'") && sw.includes("'./js/view3d/cloud-plan.js'");
   })());
+}
+
+/** The far shore's crest, as frame positions across the whole visible width. */
+function crestSamples(field) {
+  const out = [];
+  for (let i = 0; i <= 20; i++) {
+    const u = -0.05 + i * 0.055;
+    const x = placeAtDepth(u, 0.45, SHORE.z)[0];
+    const y = crestAt(x, field);
+    out.push(frameOf([x, y, SHORE.z]).v);
+  }
+  return out;
+}
+
+section('Stage 4 — the noise the granite is carved from');
+{
+  const noise = makeNoise3(7);
+
+  check('a seed reproduces a mountain exactly', (() => {
+    const a = makeNoise3(11);
+    const b = makeNoise3(11);
+    for (const p of [[0.5, 1.5, 2.5], [-3.2, 7.1, 0.4], [100.25, -0.5, 33]]) {
+      if (a(...p) !== b(...p)) return false;
+    }
+    // Sampled off the lattice: simplex is zero at every integer corner whatever
+    // the permutation is, so an integer probe compares nothing.
+    return a(0.31, 1.77, 2.13) !== makeNoise3(12)(0.31, 1.77, 2.13);
+  })());
+
+  check('simplex stays inside about ±1 and averages to nothing', (() => {
+    let lo = 9, hi = -9, sum = 0;
+    for (let i = 0; i < 8000; i++) {
+      const v = noise((i * 0.137) % 37 - 18, (i * 0.311) % 23 - 11, (i * 0.719) % 41 - 20);
+      lo = Math.min(lo, v); hi = Math.max(hi, v); sum += v;
+    }
+    return lo > -1.05 && hi < 1.05 && lo < -0.7 && hi > 0.7 && Math.abs(sum / 8000) < 0.05;
+  })());
+
+  check('ridged noise is 0..1 and piles up at the crease', (() => {
+    // `1 - |noise|` folds the field at every zero crossing, so the distribution
+    // is skewed hard toward 1 — that skew *is* the ridge. A symmetric histogram
+    // means the absolute value went missing and the rock is a lumpy taper.
+    const bins = new Array(10).fill(0);
+    let lo = 9, hi = -9;
+    for (let i = 0; i < 8000; i++) {
+      const v = ridged3(noise, (i * 0.137) % 37 - 18, (i * 0.311) % 23 - 11,
+        (i * 0.719) % 41 - 20, { freq: 0.7 });
+      lo = Math.min(lo, v); hi = Math.max(hi, v);
+      bins[Math.min(9, Math.floor(v * 10))]++;
+    }
+    const upper = bins.slice(6).reduce((a, b) => a + b, 0);
+    const lower = bins.slice(0, 4).reduce((a, b) => a + b, 0);
+    return lo >= 0 && hi <= 1 && upper > lower * 3;
+  })());
+
+  check('two octaves, and the second is offset as well as scaled', (() => {
+    // Both octaves folding in the same places only deepens one crease. The
+    // second is displaced in the lattice, which is what breaks the first.
+    const src = readFileSync(new URL('../js/view3d/noise.js', import.meta.url), 'utf8');
+    return /1 - Math\.abs\(noise\(/.test(src) && /octaves = 2/.test(src)
+      && /ox \+= 17\.31/.test(src);
+  })());
+}
+
+section('Stage 4 — six rocks, and no cones');
+{
+  const src = readFileSync(new URL('../js/view3d/peaks.js', import.meta.url), 'utf8');
+  const scn = readFileSync(new URL('../js/view3d/scenery.js', import.meta.url), 'utf8');
+
+  check('the range is five or six unique meshes, no more', (() => (
+    PEAK_MESHES.length >= 5 && PEAK_MESHES.length <= 6
+    && new Set(PEAK_MESHES.map((m) => m.id)).size === PEAK_MESHES.length
+  ))(), `${PEAK_MESHES.length} meshes`);
+
+  check('every blank is a cylinder, and nothing in the range is a cone', (() => (
+    // A cone is the one shape the eye names instantly and never mistakes for
+    // landscape. The pines keep theirs — a pine *is* a cone — but no rock may.
+    /new THREE\.CylinderGeometry\(/.test(src) && !/ConeGeometry/.test(src)
+    && !/ConeGeometry/.test(readFileSync(new URL('../js/view3d/peak-plan.js', import.meta.url), 'utf8'))
+  ))());
+
+  check('the blanks are 7–9 sided and 12–16 rows', PEAK_MESHES.every((m) => (
+    m.radialSegments >= 7 && m.radialSegments <= 9
+    && m.heightSegments >= 12 && m.heightSegments <= 16
+  )), PEAK_MESHES.map((m) => `${m.radialSegments}×${m.heightSegments}`).join(' '));
+
+  check('no summit is a point: radiusTop is 0.15–0.6 of radiusBottom',
+    PEAK_MESHES.every((m) => m.radiusTop >= 0.15 && m.radiusTop <= 0.6),
+    PEAK_MESHES.map((m) => m.radiusTop.toFixed(2)).join(' '));
+
+  check('each carries 2–4 shelves', PEAK_MESHES.every((m) => m.shelves >= 2 && m.shelves <= 4));
+
+  check('the top profiles are varied, and the set covers the brief', (() => {
+    const tops = PEAK_MESHES.map((m) => m.top);
+    return tops.includes('plateau') && tops.includes('saddle')
+      && tops.includes('arch') && PEAK_MESHES.some((m) => m.lean)
+      && new Set(tops).size >= 4;
+  })(), PEAK_MESHES.map((m) => m.top).join(' '));
+
+  check('the plateau carries a pavilion, built into its own mesh', (() => (
+    // A silhouette on the summit is the scale cue: a mountain with nothing on
+    // it could be thirty metres tall. Merged rather than instanced separately,
+    // so it costs no draw call.
+    /function pavilionGeometry/.test(src) && /top === 'plateau'/.test(src)
+    && /mergeGeometries\(\[geo, pav\]\)/.test(src)
+  ))());
+
+  check('the arch is negative space, not a painted-on hole', (() => (
+    /function archPeak/.test(src) && /const gap = spec\.radiusBottom/.test(src)
+  ))());
+
+  check('the displacement is radial and welded to the seam', (() => (
+    // Every cylinder repeats its seam column and shares its rim with the caps.
+    // A displacement that is a pure function of the *position* gives the
+    // duplicates the same answer; anything that reached for a vertex index
+    // would tear the mesh open along the seam and at both caps.
+    /pos\.setXYZ\(i, x \* rs, y, z \* rs \* squash\)/.test(src)
+    && /const r = Math\.hypot\(x, z\)/.test(src)
+  ))());
+
+  check('a radius may never cross the axis', (() => (
+    // Through zero, the two triangles sharing the vertex fold through each
+    // other and the face renders with its winding — and its lighting —
+    // inverted: a bright shard in the middle of a dark rock.
+    /rs = Math\.max\(0\.35, rs\)/.test(src)
+  ))());
+
+  check('the whole range is one material and one draw call per mesh', (() => (
+    /const peakMat = makeGraniteMaterial\(/.test(scn)
+    && (scn.match(/makeGraniteMaterial\(/g) || []).length === 1
+    && /new THREE\.InstancedMesh\(geo, peakMat, mine\.length\)/.test(scn)
+  ))());
+
+  check('all the stage-4 rock fits in eight draw calls', (() => {
+    // Six instanced peak meshes and one ground mesh. The budget is the reason
+    // the set is six rocks and not fourteen: an InstancedMesh draws one
+    // geometry, so a unique silhouette costs a draw call and they have to be
+    // spent where the eye is looking.
+    const meshes = PEAK_MESHES.length;
+    const ground = 1;
+    return meshes + ground <= 8;
+  })(), `${PEAK_MESHES.length} peak meshes + 1 ground`);
+}
+
+section('Stage 4 — the composition, against the locked camera');
+{
+  const placed = peakPlacements();
+  const bands = cloudBands();
+  const byBand = (b) => placed.filter((p) => p.band === b);
+
+  check('three hero, five supporting, six distant', (() => (
+    byBand('hero').length === 3 && byBand('supporting').length === 5
+    && byBand('distant').length === 6 && placed.length === 14
+  ))(), `${byBand('hero').length}/${byBand('supporting').length}/${byBand('distant').length}`);
+
+  check('every peak lands in the frame, or deliberately off its edge', placed.every((p) => {
+    const head = frameOf(p.summit);
+    return !head.behind && head.u > -0.15 && head.u < 1.15;
+  }));
+
+  check('every summit clears the status bar and stays above the horizon',
+    placed.every((p) => p.headV >= CAMERA.safeZone.top && p.headV < horizonV() - 0.08),
+    `${Math.min(...placed.map((p) => p.headV)).toFixed(3)}..${Math.max(...placed.map((p) => p.headV)).toFixed(3)}`);
+
+  check('the host is the tallest thing in the frame, and it stands on a third', (() => {
+    // 主山: a range with no hierarchy is a texture. The host has to be the
+    // dominant *frame* height — not the dominant world height, which the
+    // distant band wins simply by being far away.
+    const host = placed.find((p) => p.id === 'host');
+    const frameHeight = (p) => p.footV - p.headV;
+    return placed.every((p) => p === host || frameHeight(p) < frameHeight(host))
+      && Math.abs(host.u - 1 / 3) < 0.05;
+  })());
+
+  check('no two instances share a rotation', (() => (
+    new Set(placed.map((p) => p.yaw)).size === placed.length
+    && new Set(placed.map((p) => p.tilt.join(','))).size === placed.length
+  ))());
+
+  check('every instance is tilted off plumb, but only slightly',
+    placed.every((p) => p.tilt.every((t) => Math.abs(t) > 0.005 && Math.abs(t) < 0.06)));
+
+  check('every scale is inside the authored 0.6 … 2.2', placed.every((p) => (
+    p.unitScale >= SCALE_RANGE[0] && p.unitScale <= SCALE_RANGE[1]
+  )), `${Math.min(...placed.map((p) => p.unitScale)).toFixed(2)}..${Math.max(...placed.map((p) => p.unitScale)).toFixed(2)}`);
+
+  check('and the set really does vary in size', (() => {
+    // Fourteen peaks all at 1.0 would be the picket fence with extra steps.
+    const s = placed.map((p) => p.unitScale);
+    return Math.max(...s) / Math.min(...s) > 2;
+  })());
+
+  check('instances of one mesh are never neighbours across the frame', (() => {
+    // Two copies of the same rock side by side is the one arrangement where a
+    // shared silhouette is unmissable, whatever the rotation.
+    for (const mesh of PEAK_MESHES) {
+      const us = placed.filter((p) => p.mesh.id === mesh.id).map((p) => p.u).sort((a, b) => a - b);
+      for (let i = 1; i < us.length; i++) if (us[i] - us[i - 1] < 0.12) return false;
+    }
+    return true;
+  })());
+
+  check('every foot lands inside a cloud, and every summit stands clear of it',
+    placed.every((p) => bands.some((b) => (
+      p.footV > b.top && p.footV < b.bottom && p.headV < b.top
+    ))), placed.filter((p) => !bands.some((b) => (
+      p.footV > b.top && p.footV < b.bottom && p.headV < b.top
+    ))).map((p) => p.id).join(', ') || 'all fourteen');
+
+  check('the three heroes stand in the sea of cloud itself', (() => {
+    // Not merely veiled by a deck: their feet are below the lowest layer and
+    // their summits above the highest, and they stand inside the square the
+    // four planes actually cover, so the rock genuinely passes through the sea.
+    const heights = seatHeights();
+    const eye = cameraBasis(FRAMINGS.world).pos;
+    return byBand('hero').every((p) => (
+      p.position[1] < Math.min(...heights)
+      && p.summit[1] > Math.max(...heights)
+      && Math.abs(p.position[0] - eye[0]) < PLANE / 2
+      && Math.abs(p.position[2] - eye[2]) < PLANE / 2
+    ));
+  })());
+
+  check('the reveal keeps a horizon at every realm', (() => {
+    // progress.js floors peakFraction at 0.52, so the opening realm shows nine
+    // of fourteen. Taken in table order those nine are the heroes and most of
+    // the supporting band, and the skyline is simply absent — which reads as
+    // unfinished rather than as unearned.
+    const shown = Math.max(9, Math.round(placed.length * 0.52));
+    const opening = placed.slice(0, shown);
+    return opening.filter((p) => p.band === 'distant').length >= 3
+      && opening.filter((p) => p.band === 'supporting').length >= 3
+      && opening.filter((p) => p.band === 'hero').length === 3;
+  })());
+
+  check('and the lowest tier still draws a whole composition',
+    TIERS.low.peaks >= 9 && TIERS.high.peaks === 14
+    && Object.values(TIERS).every((t) => t.peaks <= 14 && t.spires === undefined));
+}
+
+section('Stage 4 — the ground, and the seam it covers');
+{
+  const field = terrainField();
+  const src = readFileSync(new URL('../js/view3d/world.js', import.meta.url), 'utf8');
+
+  check('the ground is a subdivided plane, displaced per vertex', (() => (
+    /new THREE\.PlaneGeometry\(\s*TERRAIN\.width, TERRAIN\.depth, TERRAIN\.segX, TERRAIN\.segZ,?\s*\)/.test(src)
+    && /terrainHeight\(x, z, field\)/.test(src)
+    && TERRAIN.segX >= 64 && TERRAIN.segZ >= 32
+  ))(), `${TERRAIN.segX}×${TERRAIN.segZ}`);
+
+  check('it is laid down the way that keeps its faces pointing at the sky', (() => (
+    // rotateX(-PI/2) preserves the winding; +PI/2 turns the whole valley
+    // inside-out and back-face culling deletes it.
+    /groundGeo\.rotateX\(-Math\.PI \/ 2\)/.test(src)
+  ))());
+
+  check('the far shore is a ridgeline, not a rule', (() => {
+    // Sampled across the whole visible width: the crest has to *move*, or the
+    // flat plane has simply been replaced by a flat plane with texture on it.
+    const vs = crestSamples(field);
+    const spread = Math.max(...vs) - Math.min(...vs);
+    return spread > 0.02;
+  })(), (() => {
+    const vs = crestSamples(field);
+    return `v ${Math.min(...vs).toFixed(3)}..${Math.max(...vs).toFixed(3)}`;
+  })());
+
+  check('and it stands above where the sea of cloud stops, in every column', (() => {
+    // The whole point. A radial fade on a horizontal plane is a ring, and a
+    // ring seen from 11° above projects to a horizontal line — the razor seam.
+    // Nothing done to the sea can fix that; the land has to be in front of it.
+    const seaEdge = cloudBands()[0].top;
+    return crestSamples(field).every((v) => v < seaEdge - 0.02);
+  })());
+
+  check('the crest is nearer than the sea it hides the edge of', (() => {
+    // Higher is not enough: land *behind* the fade would be seen through the
+    // gap rather than covering it. Every crest sample has to be inside the
+    // radius the sea is still drawn at.
+    const eye = cameraBasis(FRAMINGS.world).pos;
+    const far = Math.max(...LAYERS.map((L) => L.far[1]));
+    for (let i = 0; i <= 12; i++) {
+      const x = placeAtDepth(-0.05 + i * 0.09, 0.45, SHORE.z)[0];
+      const d = Math.hypot(x - eye[0], SHORE.z - eye[2]);
+      if (d > far) return false;
+    }
+    return true;
+  })());
+
+  check('the ground never rises through the meditation shelf', (() => {
+    // The island is the one thing in the frame the player is standing on.
+    for (let x = -40; x <= 40; x += 4) {
+      for (let z = -40; z <= 10; z += 4) {
+        if (Math.hypot(x, z) > 30) continue;
+        if (terrainHeight(x, z, field) > -18) return false;
+      }
+    }
+    return true;
+  })());
+
+  check('the tarn sits in a hollow the ground actually has', (() => {
+    // Water is flat, so the one flat plane left in the scene is only safe while
+    // the ground around it is higher than it on *every* side — walked here
+    // rather than argued from the section, because a river along this valley
+    // failed exactly that way: the downhill bank was under the surface and the
+    // sheet ran out of its own bed.
+    if (terrainHeight(TARN.x, TARN.z, field) > TARN.surface - 2) return false;
+    for (let a = 0; a < 24; a++) {
+      const th = (a / 24) * Math.PI * 2;
+      const x = TARN.x + Math.cos(th) * TARN.rx * 1.5;
+      const z = TARN.z + Math.sin(th) * TARN.rz * 1.5;
+      if (terrainHeight(x, z, field) < TARN.surface + 1) return false;
+    }
+    return true;
+  })());
+
+  check('and it is offset in depth where it meets its own bed', (() => (
+    // The one genuinely near-coplanar pair in the scene. At three hundred units
+    // the depth buffer cannot separate them and the surface tears into shards.
+    /polygonOffset = true/.test(src) && /polygonOffsetFactor = -2/.test(src)
+  ))());
+
+  check('the mist bands can no longer walk their own edge into frame', (() => {
+    // The floating white polygon of the sunset build: a band 2.2 frames wide
+    // wrapping at ±90 world units, so its faded corner crossed the picture.
+    // The limit is derived from the band now, not authored.
+    return /const width = frameWidth \* 4/.test(src)
+      && /band\.userData\.drift = Math\.max\(0, width \* 0\.5 - width \* 0\.14 - frameWidth \* 0\.68\)/.test(src)
+      && !/if \(b\.position\.x > limit\)/.test(src);
+  })());
+
+  check('the four new modules are in the service worker shell', (() => {
+    const sw = readFileSync(new URL('../sw.js', import.meta.url), 'utf8');
+    return ['noise', 'peaks', 'peak-plan', 'terrain-plan']
+      .every((m) => sw.includes(`'./js/view3d/${m}.js'`));
+  })());
+}
+
+section('Stage 4 — how the granite is lit');
+{
+  const src = readFileSync(new URL('../js/view3d/shaders.js', import.meta.url), 'utf8');
+  const granite = src.slice(src.indexOf('export function makeGraniteMaterial'));
+
+  check('it is a flat-shaded standard material, opaque, roughness 0.9, metal 0',
+    /new THREE\.MeshStandardMaterial\(/.test(granite)
+    && /roughness: 0\.9/.test(granite) && /metalness: 0/.test(granite)
+    && /flatShading: true/.test(granite)
+    && /transparent: false/.test(granite) && /opacity: 1/.test(granite));
+
+  check('it opts out of the tone curve and of scene.fog, like the sea does',
+    /toneMapped: false/.test(granite) && /fog: false/.test(granite));
+
+  check('the air it takes is the one air, capped per rank', (() => (
+    /uFogColor: env\.uFogColor/.test(granite) && /uFogDensity: env\.uFogDensity/.test(granite)
+    && /applyFogCapped\(lit, vViewPosition\.z, cap, vWorldY\)/.test(granite)
+    && /attribute float aFogCap/.test(granite)
+  ))());
+
+  check('the three ranks are still wired to the derived aerial tiers', (() => {
+    const scn = readFileSync(new URL('../js/view3d/scenery.js', import.meta.url), 'utf8');
+    return /const ink = p\.peaks/.test(scn) && /setColorAt/.test(scn)
+      && scn.includes('fogCap: 0.22') && scn.includes('fogCap: 0.60');
+  })());
+
+  check('the hot edge is the sun\'s, and it is gated on facing the sun', (() => (
+    /uLightColor \* edge \* smoothstep\(-0\.10, 0\.55, sun\) \* uSunEdge/.test(granite)
+  ))());
+
+  check('nothing out there wears the accent', (() => (
+    // uRimColor is the player's own qi. A background element carrying it makes
+    // her light ordinary, and the range is the largest background element there
+    // is. The old rock shader added a trace of it; this one adds none.
+    !/uRimColor/.test(granite)
+  ))());
+
+  check('the Lambert divisor is undone, so the range is on the same ladder', (() => (
+    // BRDF_Lambert divides by pi. Every colour in this renderer was authored
+    // against shading that does not, so without this the peaks come out three
+    // times darker than the palette says they are.
+    /gain = Math\.PI/.test(granite) && /outgoingLight \* uGain/.test(granite)
+  ))());
+
+  check('the karst vertex-shader profile is gone with the range it carved',
+    !/karstProfile/.test(src) && !/makeRockMaterial/.test(src));
 }
 
 section('Camera lock — the harness ships to nobody');
