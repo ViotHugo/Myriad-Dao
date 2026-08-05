@@ -39,8 +39,9 @@ cloud is your realm, and you can read it without looking at a single number.
 The whole picture is built on one relationship: cloud is the brightest thing in
 the frame, the peaks are ink and always darker than the sky behind them, and the
 ranks step from near-black to pale as they recede. That ladder is asserted in
-the test suite for all eight skies, because when it inverts nothing throws — the
-range is simply drawn in colours that make it indistinguishable from the air.
+the test suite for all eight realms at every hour of the day, because when it
+inverts nothing throws — the range is simply drawn in colours that make it
+indistinguishable from the air.
 
 Everything is synthesised or generated: the mountains from seeded ridged noise,
 the guqin from oscillators through a feedback-delay "valley echo", the icons
@@ -60,9 +61,10 @@ And because "does this look better" is not a gate, the instruments came before
 the art. On localhost or with `?debug`: `G` renders the frame as pure luminance
 — an ink-wash landscape is a value ladder, and colour is very good at hiding one
 that has collapsed — plus wireframe, safe-zone overlay with live composition
-guides, a scrubber that walks the eight skies continuously, and four fixed
-cameras. `npm run sheet` shoots all four against four skies into one sixteen-cell
-contact sheet, deterministically, from a headless browser with no dependencies.
+guides, a scrubber that walks the whole day continuously — dawn, day, sunset,
+night — and four fixed cameras. `npm run sheet` shoots all four cameras against
+all four times of day into one sixteen-cell contact sheet, deterministically,
+from a headless browser with no dependencies.
 
 ## Layout
 
@@ -73,11 +75,12 @@ js/ui.js                 DOM/CSS HUD
 js/audio.js              synthesised WebAudio
 js/view3d/               Three.js: shaders, world, scenery, avatar, sect, effects
 js/view3d/camera-config.js   the locked camera — one object, no scattered literals
+js/view3d/time-of-day.js dawn, day, sunset, night — the sky, the air and the light
 js/view3d/debug.js       the QA harness. Dev-only, dynamically imported, never shipped
 tools/contact-sheet.js   drives a headless browser to shoot the 16-frame sheet
 tools/balance-sim.js     plays the engine headlessly, checks pacing
 tools/make-icons.js      regenerates the PWA icons
-tests/run.js             311 checks
+tests/run.js             358 checks
 docs/DESIGN.md           art direction, performance budget, quality tiers, balance
 ```
 

@@ -199,7 +199,13 @@ export function createAvatar(env, tier) {
   const filamentGeo = new THREE.BufferGeometry().setFromPoints(meridianPoints);
   const filament = new THREE.Line(
     filamentGeo,
-    new THREE.LineBasicMaterial({ color: 0x8fd8c0, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false }),
+    // fog: false — see the bolt in effects.js. The world's air is applied by
+    // the ink shaders; a stock material silently picking up `scene.fog` as well
+    // would be the second opinion about the air that stage 2 exists to remove.
+    new THREE.LineBasicMaterial({
+      color: 0x8fd8c0, transparent: true, opacity: 0,
+      blending: THREE.AdditiveBlending, depthWrite: false, fog: false,
+    }),
   );
   group.add(filament);
 

@@ -7,6 +7,8 @@ import * as THREE from 'three';
 import { mulberry32 } from '../rng.js';
 import { placeAtDepth } from './framing.js';
 import { cragGeometry, stoneGeometry } from './rock.js';
+import { AURORA_COLOR } from './palette.js';
+import { sunDirection } from './time-of-day.js';
 import {
   makeSkyMaterial, makeRidgeMaterial, makeInkMaterial, makeWaterMaterial,
   makeMistMaterial,
@@ -89,9 +91,27 @@ export function createWorld(env, tier, lighting) {
 
   /* sky ------------------------------------------------------------- */
   const skyMat = makeSkyMaterial(env);
-  const sky = new THREE.Mesh(new THREE.SphereGeometry(760, 32, 20), skyMat);
+  skyMat.uniforms.uAuroraColor.value.set(AURORA_COLOR);
+  // 64×32, not 32×20. The gradient is read from the ray through each fragment,
+  // and a ray interpolated across a coarse sphere is a chord where it wants an
+  // arc: the error is periodic in the segment, which lays a faint vertical seam
+  // every 11° across the one surface in the frame with nothing else on it.
+  // Quadrupling the segments quarters that; the dither takes what is left. The
+  // sphere costs one draw call either way.
+  const sky = new THREE.Mesh(new THREE.SphereGeometry(760, 64, 32), skyMat);
   sky.frustumCulled = false;
   group.add(sky);
+
+  /* fog -------------------------------------------------------------- */
+  //
+  // The single owner of the air, and the reason it is a real THREE.FogExp2
+  // rather than a pair of loose numbers: the ink shaders read their fog colour
+  // and density straight off this object, so there is exactly one place where
+  // "what colour is the air" is answered, and it is answered with the day's
+  // horizon colour — the same value the sky sphere's middle stop is drawn with.
+  // Anything else and every distant surface is a slightly wrong rectangle
+  // pasted onto the horizon.
+  const fog = new THREE.FogExp2(0x8fa3b8, 0.018);
 
   /* ridges ----------------------------------------------------------- */
   // Five layers marching away from the shelf. Each is specified by where its
@@ -371,62 +391,93 @@ export function createWorld(env, tier, lighting) {
   }
   group.add(mist);
 
-  /* ------------------------------------------------------ realm palette */
+  /* ------------------------------------------ the day, and the realm in it */
+  //
+  // Two inputs, one authority each:
+  //
+  //   `tod`  the hour — sky, air, exposure, and where the sun stands above the
+  //          horizon. Already lerped by time-of-day.js; this only eases toward
+  //          it so a realm change does not cut.
+  //   `p`    the realm — its ink, its ridges, its bounce, its cloud, and the
+  //          compass point its sun keys from.
+  //
+  // Everything downstream reads `cur`, which is the two of them resolved.
 
   const cur = {
-    top: new THREE.Color(), mid: new THREE.Color(), horizon: new THREE.Color(),
-    fog: new THREE.Color(), fogHigh: new THREE.Color(),
-    ambient: new THREE.Color(), light: new THREE.Color(),
-    ground: new THREE.Color(), rim: new THREE.Color(),
-    waterTop: new THREE.Color(), waterHorizon: new THREE.Color(), waterTint: new THREE.Color(),
+    zenith: new THREE.Color(), horizon: new THREE.Color(), below: new THREE.Color(),
+    ambient: new THREE.Color(), ground: new THREE.Color(), inkRim: new THREE.Color(),
+    waterTop: new THREE.Color(), waterTint: new THREE.Color(),
     ridges: LAYERS.map(() => new THREE.Color()),
-    density: 0.01,
-    dir: new THREE.Vector3(),
-    // The sun as the light rig wants it: how hard it is, and what colour it
-    // rims with. Both were already authored per realm and only the karst
-    // material was reading them.
-    sunColor: new THREE.Color(), sunPower: 0.6,
-    flags: { stars: 0, aurora: 0, moon: 0, cloudSea: 0 },
+    density: 0.018,
+    dir: new THREE.Vector3(0.4, 0.1, 0.55).normalize(),
+    // The sun as the light rig wants it: where, how hard, what colour, and what
+    // colour it rims the cultivator with — which at night is not its own.
+    sunColor: new THREE.Color(), sunPower: 0.6, rimColor: new THREE.Color(),
+    // The two dials that live outside the scene graph, held here so the view
+    // has one place to read them from. Both are lerped like everything else.
+    exposure: 1, bloom: 0.4,
+    flags: { stars: 0, aurora: 0, cloudSea: 0 },
   };
 
-  /** Snap every colour to a palette with no transition (used at boot). */
-  function applyPalette(p, immediate = false, mixAmount = 1) {
-    const k = immediate ? 1 : mixAmount;
-    cur.top.lerp(new THREE.Color(p.sky.top), k);
-    cur.mid.lerp(new THREE.Color(p.sky.mid), k);
-    cur.horizon.lerp(new THREE.Color(p.sky.horizon), k);
-    cur.fog.lerp(new THREE.Color(p.fog.color), k);
-    cur.fogHigh.lerp(new THREE.Color(p.fog.high || p.fog.color), k);
-    cur.ambient.lerp(new THREE.Color(p.ambient), k);
-    cur.light.lerp(new THREE.Color(p.light.color), k);
-    cur.ground.lerp(new THREE.Color(p.ground), k);
-    cur.rim.lerp(new THREE.Color(p.aura), k);
-    cur.waterTop.lerp(new THREE.Color(p.water.top), k);
-    cur.waterHorizon.lerp(new THREE.Color(p.water.horizon), k);
-    cur.waterTint.lerp(new THREE.Color(p.water.tint), k);
-    p.ridges.forEach((c, i) => cur.ridges[i].lerp(new THREE.Color(c), k));
-    cur.density += (p.fog.density - cur.density) * k;
-    cur.dir.lerp(new THREE.Vector3(...p.light.dir).normalize(), k);
-    cur.sunColor.lerp(new THREE.Color(p.sun.color), k);
-    cur.sunPower += (p.sun.power - cur.sunPower) * k;
-    for (const f of ['stars', 'aurora', 'moon', 'cloudSea']) {
-      const target = tier.stars || f !== 'stars' ? p.flags[f] : 0;
-      cur.flags[f] += (target - cur.flags[f]) * k;
-    }
+  const scratch = new THREE.Color();
+  const scratchDir = new THREE.Vector3();
 
-    skyMat.uniforms.uTop.value.copy(cur.top);
-    skyMat.uniforms.uMid.value.copy(cur.mid);
+  /**
+   * Paint the world at a realm and an hour. `immediate` snaps (boot, capture,
+   * the QA scrubber); otherwise `mixAmount` is one frame's worth of easing.
+   */
+  function applyPalette(p, tod, immediate = false, mixAmount = 1) {
+    const k = immediate ? 1 : mixAmount;
+    const to = (c, hex) => c.lerp(scratch.set(hex), k);
+
+    to(cur.zenith, tod.zenith);
+    to(cur.horizon, tod.horizon);
+    to(cur.below, tod.below);
+    to(cur.sunColor, tod.sun);
+    to(cur.rimColor, tod.rim);
+    to(cur.ambient, p.ambient);
+    to(cur.ground, p.ground);
+    to(cur.inkRim, p.aura);
+    to(cur.waterTint, p.water);
+    // Water holds the sky: bright toward the far bank where it carries the
+    // skyline, darker in the near water where it carries the upper sky. Both
+    // are the sky's own colours, or the river reads as a differently-coloured
+    // hole in the valley floor.
+    cur.waterTop.copy(cur.horizon).lerp(cur.zenith, 0.5);
+    p.ridges.forEach((c, i) => to(cur.ridges[i], c));
+
+    cur.density += (tod.fogDensity - cur.density) * k;
+    cur.sunPower += (tod.sunPower - cur.sunPower) * k;
+    cur.exposure += (tod.exposure - cur.exposure) * k;
+    cur.bloom += (tod.bloom - cur.bloom) * k;
+    // Bearing from the realm, elevation from the day — and lerped as a vector,
+    // which takes the short way round. Easing the bearing as a number instead
+    // would swing the sun through the lens on the two realm changes that key
+    // from behind, and a key light passing across the camera is a flat frame.
+    cur.dir.lerp(scratchDir.fromArray(sunDirection(p.bearing, tod.sunElevation)), k).normalize();
+
+    const stars = tier.stars ? tod.stars : 0;
+    cur.flags.stars += (stars - cur.flags.stars) * k;
+    cur.flags.aurora += (p.flags.aurora - cur.flags.aurora) * k;
+    cur.flags.cloudSea += (p.flags.cloudSea - cur.flags.cloudSea) * k;
+
+    skyMat.uniforms.uZenith.value.copy(cur.zenith);
     skyMat.uniforms.uHorizon.value.copy(cur.horizon);
+    skyMat.uniforms.uBelow.value.copy(cur.below);
+    skyMat.uniforms.uSunColor.value.copy(cur.sunColor);
+    skyMat.uniforms.uSunDir.value.copy(cur.dir);
     skyMat.uniforms.uStars.value = cur.flags.stars;
     skyMat.uniforms.uAurora.value = cur.flags.aurora;
-    skyMat.uniforms.uMoon.value = cur.flags.moon;
     skyMat.uniforms.uCloudSea.value = cur.flags.cloudSea;
-    skyMat.uniforms.uAccent.value.set(p.accent);
 
-    env.uFogColor.value.copy(cur.fog);
-    env.uFogHigh.value.copy(cur.fogHigh);
-    env.uFogDensity.value = cur.density;
-    env.uRimColor.value.copy(cur.rim);
+    // The fog object is the air, and the shaders read it rather than keeping a
+    // second copy. `scene.fog` is this same instance.
+    fog.color.copy(cur.horizon);
+    fog.density = cur.density;
+    env.uFogColor.value.copy(fog.color);
+    env.uFogHigh.value.copy(cur.zenith);
+    env.uFogDensity.value = fog.density;
+    env.uRimColor.value.copy(cur.inkRim);
 
     // The sun, the sky bounce and the rim are the light rig's to write — it
     // owns both the THREE.Lights that render the shadow map and the uniforms
@@ -438,7 +489,7 @@ export function createWorld(env, tier, lighting) {
     for (const { mat, layer } of ridgeMats) mat.uniforms.uColor.value.copy(cur.ridges[layer]);
     if (waterMat) {
       waterMat.uniforms.uTop.value.copy(cur.waterTop);
-      waterMat.uniforms.uHorizon.value.copy(cur.waterHorizon);
+      waterMat.uniforms.uHorizon.value.copy(cur.horizon);
       waterMat.uniforms.uTint.value.copy(cur.waterTint);
     }
     for (const m of mistMats) m.uniforms.uColor.value.copy(cur.horizon);
@@ -459,8 +510,10 @@ export function createWorld(env, tier, lighting) {
   }
 
   return {
-    group, sky, skyMat, water, ridges, pine, mist,
+    group, sky, skyMat, fog, water, ridges, pine, mist,
     applyPalette, setStorm, update,
+    /** The resolved day: what the exposure and bloom dials should be showing. */
+    atmosphere: cur,
     materials: { groundMat, stoneMat, trunkMat, needleMat },
   };
 }

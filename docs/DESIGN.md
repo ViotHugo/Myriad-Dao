@@ -96,9 +96,11 @@ Four things make it read as ink rather than as low-poly terrain:
 2. **The layers are a painter's stack.** They write no depth, so `renderOrder`
    runs furthest-first. Getting this backwards makes a distant range paint over
    the ridge in front of it.
-3. **Paper, once, over the whole frame.** Long fibres one way, a fine tooth the
-   other, plus a vignette. The grain is *static* — grain that crawls per frame
-   reads as video noise, not as paper.
+3. **Paper, once, over the whole frame.** A fine tooth, plus a vignette. The
+   grain is *static* — grain that crawls per frame reads as video noise, not as
+   paper. It used to carry two long fibre octaves as well, one stretched each
+   way, and two anisotropic octaves crossed is a weave: over a flat sky that is
+   a sheet of fabric hanging behind the mountains. Stage 2 deleted them.
 4. **There is something in the middle distance.** The authored camera is yawed,
    so the band of frame between the shelf and the first range looks out at
    roughly world x −26, z −40. That was empty sky in every realm — the eye went
@@ -200,16 +202,35 @@ frame, which the art rules forbid outright.
 
 ### Where the sun stands
 
-`light.dir` used to be a free number, because all it decided was which flank of a
-ridge took the warm ramp. It decides where every shadow falls now.
+It used to be a free number, because all it decided was which flank of a ridge
+took the warm ramp. It decides where every shadow falls now.
 
-Five of the eight skies had the sun within fifteen degrees of the camera's own
+**Bearing belongs to the realm; elevation belongs to the day.** How high the
+light stands is a property of the hour and nothing else, so it lives in
+`time-of-day.js` — 6° at dawn, 55° at noon, 4° at sunset, 40° for the moon.
+Which compass point it comes from is a composition decision made against the
+locked camera, so it stays in `palette.js`, per realm, where the suite can hold
+it to its floor.
+
+Five of the eight realms had the sun within fifteen degrees of the camera's own
 bearing. A key behind the viewer's head is the flattest light there is: nothing
 the camera sees is turned away from it, and every shadow falls behind the thing
 that cast it. `sunOffsetDeg()` in `framing.js` measures the angle between the
-two bearings, and the suite holds every sky to a 60° floor and a 20°–50°
-elevation band, so it cannot come back. Six key from the left, so the shadow runs
-into the open right of the frame; the moon realm keys from behind at 156°.
+two bearings and the suite holds every realm to a 60° floor, so it cannot come
+back. Six key from the left, so the shadow runs into the open right of the
+frame; the moon realm keys from behind at 156°.
+
+Stage 1 also held elevation to a 20°–50° band. Stage 2's table deliberately
+breaks the bottom of it: a 4° sunset and a 6° dawn are *raking* light with very
+long shadows, which is the opposite of the fault that band was written against
+— a sun near the zenith, which has no direction to read. The floor moved to the
+day, where it now says "above the horizon and out of the zenith", 3°–60°.
+
+One consequence worth writing down: because every sun stands at least 60° off
+the lens, the disc itself is never in a shipped frame. What the composition gets
+is its light, not its face. Swing the camera round to it — the QA scrubber can —
+and it is there, low over the range at dawn and sunset, with a halo wide enough
+to carry into frame if a later stage ever brings a bearing round.
 
 ### The post stack
 
@@ -226,17 +247,54 @@ does the grayscale QA toggle that lives inside it.
 The addons are vendored verbatim under `vendor/three-addons/`, pinned to the same
 `three` revision as the core.
 
-### The eight skies as a lighting script
+### The day, and the realm standing in it
 
-`js/view3d/palette.js` holds one entry per realm: sky top/mid/horizon, the two
-air colours and their density, light direction and colour, ambient, ground, five
-ridge tones, a three-step `peaks` ink ramp, a `sun` colour and power for the
-ridge light, cloud and crest, water, aura, robe, trim, and flags for stars /
-moon / aurora / cloud-sea. A realm change lerps every one of those over ~3
-seconds. Nothing hard-cuts.
+Two axes, and each has exactly one owner. That split is stage 2's whole
+contribution and it replaced eight hand-authored skies.
 
-The bright stop belongs **at** the horizon (`d.y ≈ 0`), not at the nadir — a
-dawn glows along the skyline and darkens toward the zenith.
+**`js/view3d/time-of-day.js` owns the hour.** Four authored states — dawn, day,
+sunset, night — and every value between them is a continuous lerp:
+
+| | Zenith | Horizon | Sun/Moon | Sun elev | Fog density | Exposure | Accent |
+|---|---|---|---|---|---|---|---|
+| Dawn | `#2b3a52` | `#8fa3b8` | `#e8d5c0` | 6° | 0.018 | 0.90 | `#9fe3d0` |
+| Day | `#4a7ba8` | `#cfe0ea` | `#fff6e6` | 55° | 0.010 | 1.10 | `#8fe0c8` |
+| Sunset | `#6b3f52` | `#f0a860` | `#ff9a4d` | 4° | 0.016 | 1.00 | `#ffd98a` |
+| Night | `#0d1626` | `#2a3752` | `#cfe0ff` | 40° | 0.020 | 0.75 | `#7fd4ff` |
+
+Night additionally brings the star field up to 1, the bloom to 0.55 — at an
+exposure of 0.75 the handful of bright things left in the frame are most of what
+the eye has to read — and shifts the cultivator's rim light blue, because the
+only thing standing behind her is the sky. Those are three more lerped fields,
+not three switches: **nothing in this renderer hard-swaps on a time of day.** A
+threshold is exactly the pop the transition exists to prevent, and it is also
+how a value that is only right at the four keys gets shipped unnoticed.
+
+The dial is a **circle**: night runs back into dawn, `t` and `t + 1` are the
+same sky, and a realm change eases along it the short way round. Eased as a
+plain number, ascension's daybreak returning to first light would run the whole
+day backwards in three seconds.
+
+**`js/view3d/palette.js` owns the ink.** A realm is now a position on the day
+(`tod`), the near-black its range is carved from (`ink`), the compass bearing
+its sun keys from, five ridge tones, cloud and crest, water tint, bounce
+colours, robe, trim, aura, blossom, bark and crane. It carries **no sky, no fog
+and no light colour** — the suite fails if one grows back, because two owners of
+the air is the fault this stage exists to remove.
+
+The eight realms walk one full day in order, from the grey first light of Body
+Tempering to the golden daybreak of Immortal Ascension. Everything gold in that
+last frame is the realm's own ink and cloud; the sky it stands in is dawn.
+
+**Why the sky could not stay per realm.** Fog has to be the colour of the sky at
+the horizon — not close to it, the *same value* — or every distant surface is a
+slightly wrong rectangle pasted onto the skyline. Eight authored skies plus a
+time-of-day model is two answers to "what colour is the air", and the day they
+disagree nothing throws. There is one air now: `scene.fog` is a real
+`THREE.FogExp2` built from `tod.horizon` and `tod.fogDensity`, and the ink
+shaders read `uFogColor` and `uFogDensity` back off that same object rather than
+keeping a second copy. `uFogHigh` — the air up where the summits are — is the
+day's zenith, which is what you are actually looking through up there.
 
 **The lerp list has to be complete.** `index.js` holds a `live` palette of
 THREE.Colors that the scene modules are handed each frame, and for a while it
@@ -246,6 +304,65 @@ the *material was constructed with*, so `cloud`, `cloudCrest`, `crane`,
 `blossom` and `bark` were authored per realm, wired nowhere, and the sea of
 cloud stayed the same slate grey through all eight skies. A palette entry that
 nothing reads is indistinguishable from a palette entry that is wrong.
+
+### The sky sphere
+
+A `ShaderMaterial` on a `BackSide` sphere, and deliberately almost nothing on
+it: three stops (zenith → horizon → below-horizon, the third derived from the
+first two so nothing invents its own), a sun or moon disc via
+`smoothstep(dot(viewDir, sunDir))` with a wide soft halo, stars, and the two
+realm set-dressings. The bright stop belongs **at** the horizon (`d.y ≈ 0`), not
+at the nadir — a dawn glows along the skyline and darkens toward the zenith —
+and the band is pitched at what the locked camera sees, which is about 20° above
+horizontal, with an exponent packing more of the change into the low sky.
+
+Three things came off it, and each was invisible as a bug:
+
+- **The fabric.** The post pass laid two anisotropic fbm octaves over the frame
+  — one stretched along x, one along y, which is a weave. Over rock, where there
+  is form to hide it, it cost nothing; over a flat sky it is a sheet of cloth
+  hanging behind the mountains. The isotropic paper tooth stays.
+- **The seam.** The gradient used to be read off `normalize(position)`, which on
+  a 32-segment sphere interpolates a chord where it wants an arc and steps the
+  gradient once per segment: a faint vertical line every 11° across the one
+  surface in the frame with nothing else on it. The ray is per-fragment from the
+  camera now, and the sphere is built at 64×32.
+- **The moon.** It hung at a hardcoded direction, lit for one hour of one realm
+  — precisely the thing this stage exists to stop. The moon is the night's sun:
+  same three lines, drawn where the key light stands.
+
+**The dither belongs at the encode, not in the sky.** The staircase everybody
+sees in a shallow gradient appears when the frame is quantised to eight bits,
+which happens in the last line of the post pass — so that is where
+`+ (hash(gl_FragCoord.xy) - 0.5) / 255.0` goes, after the tone curve, the grain,
+the vignette and the QA grayscale. Written into the sky shader instead it would
+be a flat 1/255 of *linear light*: half a step at noon and seven steps of
+visible noise in a night sky. Measured on the contact sheet, a night sky was
+holding one level for up to forty rows before this and holds it for three after.
+
+### Aerial perspective, as three material tiers
+
+Near, mid and far, and no custom shader: three colours and a haze cap each.
+A picture with no texture and no atmosphere model has exactly one cue for depth,
+which is what distance does to a colour. Two things happen to a mountain twenty
+kilometres away — it gets **lighter**, because there is a column of lit air in
+front of it, and it gets **less saturated**, because that air is grey and it is
+most of what you are looking at. Doing only the first gives a range of pale
+versions of the same hue, which reads as closer mountains painted badly.
+
+So the tiers are *derived*, by `aerialTiers(ink, air)`, rather than authored:
+mix the realm's ink toward the day's horizon colour by 10 / 26 / 44 %, then
+desaturate by 12 / 26 / 40 % on top. Desaturation is toward each colour's own
+luminance, so it cannot move a tier up or down the value ladder — only the
+deliberate mix toward the air does that, which is what makes the ladder a
+property of the arithmetic instead of eight ramps that were each only ever
+checked against one sky.
+
+The mix is scaled by how much light is in the air. Haze is *lit* air, and at
+night there is none: mix the same 44% toward a night horizon and the furthest
+rank lands within a dozen levels of the sky behind it — the same smear the ramp
+exists to prevent, arrived at from the other direction. A far range under a
+night sky stays black and reads as a silhouette.
 
 ### What each system looks like
 
@@ -544,13 +661,14 @@ panel only throws them.
 | `G` | grayscale — the finished frame as pure value |
 | `W` | wireframe |
 | `S` | safe-zone overlay, plus live horizon / anchor / figure guides |
-| `T` | time-of-day scrubber, 0→1 across the eight skies (`←`/`→` to step) |
+| `T` | the day, 0→1 across dawn, day, sunset, night and round again (`←`/`→` to step) |
 | `C` | cycle the four fixed cameras: hero, wide, close, profile |
 | `P` | shoot a contact sheet |
 | `` ` `` | hide the panel |
 
-The panel reads out FPS, draw calls and triangles, and — the part that matters —
-the live composition measured against the contract, turning red the moment the
+The panel reads out FPS, draw calls and triangles, the hour the frame is being
+painted at with its exposure and fog density, and — the part that matters — the
+live composition measured against the contract, turning red the moment the
 horizon, the anchor or the figure's height leaves tolerance.
 
 **Grayscale is the primary instrument.** An ink-wash landscape is a value ladder
@@ -567,7 +685,10 @@ than silently doing nothing.
 
 ### The contact sheet
 
-Four cameras × four skies = sixteen frames in one image. `npm run sheet` starts
+Four cameras × four times of day = sixteen frames in one image. The columns are
+the four authored states, with the realm's own ink held still underneath them,
+so a row answers the only question stage 2 cares about: does this hold up under
+all four lighting conditions, or does it only work at dusk? `npm run sheet` starts
 the static server, drives a headless Chromium at it over the DevTools protocol
 with no dependencies beyond Node's own `WebSocket`, and writes
 `screenshots/contact-sheet.png`; `npm run sheet:gray` shoots the value-ladder

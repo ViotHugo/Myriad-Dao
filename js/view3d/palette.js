@@ -1,7 +1,36 @@
-// The eight skies of A15, written as a lighting script rather than textures.
+// The eight realms, written as an ink script rather than as eight skies.
 //
 // A realm change lerps every one of these values over ~3 seconds, so the world
 // never hard-cuts. Nothing here is loaded; it is all numbers.
+//
+// ---------------------------------------------------------------------------
+// What is in this file, and what is not, since stage 2
+//
+// This used to carry a whole sky per realm — zenith, horizon, two fog colours,
+// a density, a light colour, a sun power. It does not any more. **The air, the
+// sky and the light belong to the time of day**, which lives in
+// `time-of-day.js` as four authored states with everything in between, and a
+// realm is a *position on that day* plus its own ink.
+//
+// The reason is the one stage 2 exists to fix: two owners of the sky is two
+// owners of the fog, and the moment they disagree every distant object in the
+// frame is a slightly wrong rectangle pasted onto the horizon. There is one
+// air now, and everything hazes toward it.
+//
+// So a realm is:
+//
+//   tod       where on the day it stands. The eight realms walk one full day,
+//             from the grey first light of Body Tempering to the golden
+//             daybreak of Ascension — the wheel comes round.
+//   ink       the near-black the range is carved out of. The three ranks of
+//             aerial perspective are *derived* from this and the day's air by
+//             aerialTiers(); they are not authored, so they cannot be authored
+//             against one sky and quietly break in the other three.
+//   bearing   the compass point the sun stands at, in degrees (atan2(x, z)).
+//             Elevation is the day's, bearing is the realm's — see the header
+//             of time-of-day.js for why the two have different owners.
+//   the rest  ridges, cloud, water tint, robe, trim, aura, blossom, bark,
+//             crane: the realm's own colour identity, none of which is sky.
 //
 // ---------------------------------------------------------------------------
 // The one rule this file exists to keep
@@ -16,21 +45,22 @@
 //     peaks   — ink. Always darker than the sky standing behind them, and
 //               stepping from near-black in front to pale in the distance.
 //
-// The earlier build tinted the peaks with the *ridge* colours, which are meant
+// An earlier build tinted the peaks with the *ridge* colours, which are meant
 // for valley walls seen against mist and run pale at the far end. Against the
 // sky that inverts the whole picture: the far rank came out lighter than the
-// air behind it, every rank landed inside the sky's own value range, and a
-// range of mountains turned into a smear. `peaks` and `cloud` below are chosen
-// against `sky`, and tests/run.js asserts the ladder holds for all eight — this
-// is the invariant the art depends on, so it is checked rather than trusted.
+// air behind it and a range of mountains turned into a smear. The ranks are
+// derived from `ink` and the day's air now, which makes the ladder a property
+// of the arithmetic — but `tests/run.js` still asserts it for all eight realms
+// at every time of day, because an invariant the art depends on is checked
+// rather than trusted.
 //
 // ---------------------------------------------------------------------------
 // The second rule: where the sun stands
 //
-// `light.dir` points *at* the sun. It used to be a free number, because in the
-// old renderer all it decided was which flank of a ridge took the warm ramp.
-// It decides a great deal more now — it is the DirectionalLight that renders
-// the shadow map, so it also decides where every shadow in the frame falls.
+// `bearing` used to be a free number, because in the old renderer all it
+// decided was which flank of a ridge took the warm ramp. It decides a great
+// deal more now — it aims the DirectionalLight that renders the shadow map, so
+// it also decides where every shadow in the frame falls.
 //
 // Five of these eight had the sun within fifteen degrees of the camera's own
 // bearing. A key light behind the viewer's head is the flattest light there
@@ -38,172 +68,152 @@
 // turns away, and every shadow in the picture falls into the exact place the
 // figure that cast it is standing in front of. It is, on its own, most of why
 // this landscape read as coloured paper. `sunOffsetDeg()` in framing.js
-// measures it and the suite holds every sky to a floor, so it cannot come back.
+// measures it and the suite holds every realm to a floor, so it cannot come
+// back.
 //
 // The camera is locked at yaw 0.62 rad, so it looks in along a bearing of 35°.
-// Every sun here now stands at least 60° off that, which is what puts a lit
-// face and a shadowed face on the same rock and lays the cultivator's shadow
-// across the shelf instead of behind her. Six key from the left, so the shadow
-// runs into the open right of the frame; two of the night skies key from
-// behind, where the range is rimmed and the shadow comes toward the eye.
-// Elevation is each realm's own — a low raking sunset, a high golden noon —
-// except that nothing sits within thirty degrees of the zenith any more,
-// because a sun overhead has no direction to read either.
+// Every sun here stands at least 60° off that, which is what puts a lit face
+// and a shadowed face on the same rock and lays the cultivator's shadow across
+// the shelf instead of behind her. Six key from the left, so the shadow runs
+// into the open right of the frame; two of the night realms key from behind,
+// where the range is rimmed and the shadow comes toward the eye.
 // ---------------------------------------------------------------------------
 
 export const PALETTES = [
-  { // 0 — Body Tempering: misty grey dawn
-    sky: { top: '#232a34', mid: '#3c4552', horizon: '#8a929c' },
-    // Air is two colours: bright along the skyline, colder and darker up where
-    // the summits are. One flat fog colour makes every distance identical.
-    fog: { color: '#8d96a2', high: '#4f5966', density: 0.0105 },
-    light: { dir: [-0.54, 0.48, 0.42], color: '#ffeede' },   // 88° off the lens, 35° up
+  { // 0 — Body Tempering: the grey first light
+    tod: 0.00,
+    ink: '#1b2129',
+    bearing: -52,            // 88° off the lens
     ambient: '#333c46',
     ground: '#2b3038',
     ridges: ['#252b34', '#2f3742', '#3b4552', '#495564', '#5a6673'],
-    peaks: ['#1b2129', '#2b3440', '#41505f'],
-    sun: { color: '#ffe8cf', power: 0.55 },
-    water: { top: '#3c4552', horizon: '#8a929c', tint: '#232a2f' },
+    water: '#232a2f',
     aura: '#9fb3c8',
     robe: '#6b6257',
     trim: '#8f8577',
-    accent: '#35c98e',
     blossom: '#f6d3e0', bark: '#1b1519',
     cloud: '#c6d0da', cloudCrest: '#eef4fa', crane: '#f2f6fa',
-    flags: { stars: 0, aurora: 0, moon: 0, cloudSea: 0 },
+    flags: { aurora: 0, cloudSea: 0 },
   },
-  { // 1 — Qi Condensation: teal morning
-    sky: { top: '#10333a', mid: '#1c5560', horizon: '#7fc4c0' },
-    fog: { color: '#6fb0ab', high: '#2e6a6e', density: 0.0095 },
-    light: { dir: [-0.57, 0.45, 0.35], color: '#fff6e0' },   // 94°, 34° up
+  { // 1 — Qi Condensation: teal, and the day coming up
+    tod: 0.22,
+    ink: '#0d2a30',
+    bearing: -58,            // 94°
     ambient: '#23414a',
     ground: '#1c3038',
     ridges: ['#12292f', '#193740', '#22474f', '#2d5a61', '#3a6d70'],
-    peaks: ['#0d2a30', '#17444c', '#2a6068'],
-    sun: { color: '#fff0cd', power: 0.60 },
-    water: { top: '#1c5560', horizon: '#7fc4c0', tint: '#0f2a30' },
+    water: '#0f2a30',
     aura: '#35c98e',
     robe: '#2f6b63',
     trim: '#57a892',
-    accent: '#35c98e',
     blossom: '#f4cfe0', bark: '#17201f',
     cloud: '#c2ded9', cloudCrest: '#eafaf6', crane: '#f0fbf7',
-    flags: { stars: 0, aurora: 0, moon: 0, cloudSea: 0 },
+    flags: { aurora: 0, cloudSea: 0 },
   },
-  { // 2 — Foundation Establishment: amber sunset
-    sky: { top: '#2a1a24', mid: '#7a3a26', horizon: '#f2b26b' },
-    fog: { color: '#c2865c', high: '#5e3830', density: 0.0088 },
-    light: { dir: [-0.63, 0.38, 0.33], color: '#ffd9a0' },   // 98°, 28° up — the lowest
+  { // 2 — Foundation Establishment: the amber hour
+    tod: 0.50,
+    ink: '#2a1a1e',
+    bearing: -62,            // 98°
     ambient: '#46262a',
     ground: '#3a2420',
     ridges: ['#2a171e', '#3a2124', '#4c2e2a', '#5f3c31', '#744c3c'],
-    peaks: ['#2a1a1e', '#43282a', '#66423c'],
-    // Low sun: the hardest, warmest ridge light of the eight.
-    sun: { color: '#ffcf85', power: 1.05 },
-    water: { top: '#7a3a26', horizon: '#f2b26b', tint: '#33161a' },
+    water: '#33161a',
     aura: '#e8b34b',
     robe: '#7a3f2c',
     trim: '#d79a54',
-    accent: '#e8b34b',
     blossom: '#ffd9dc', bark: '#241416',
     cloud: '#f0cfae', cloudCrest: '#fff0d8', crane: '#fff2e2',
-    flags: { stars: 0, aurora: 0, moon: 0, cloudSea: 0 },
+    flags: { aurora: 0, cloudSea: 0 },
   },
-  { // 3 — Core Formation: violet dusk
-    sky: { top: '#150f2b', mid: '#382a63', horizon: '#9c7fc4' },
-    fog: { color: '#8b74b0', high: '#3b2d5e', density: 0.0092 },
-    light: { dir: [-0.63, 0.45, 0.23], color: '#e0d0ff' },   // 106°, 34° up
+  { // 3 — Core Formation: violet, the light going
+    tod: 0.60,
+    ink: '#191233',
+    bearing: -70,            // 106°
     ambient: '#2b2450',
     ground: '#22193a',
     ridges: ['#1a1330', '#221a3c', '#2d2249', '#3a2c5c', '#4a3a70'],
-    peaks: ['#191233', '#281d47', '#3e2f66'],
-    sun: { color: '#f0dcff', power: 0.62 },
-    water: { top: '#382a63', horizon: '#9c7fc4', tint: '#181233' },
+    water: '#181233',
     aura: '#b07ae8',
     robe: '#4a2f70',
     trim: '#9b74d4',
-    accent: '#b07ae8',
     blossom: '#f0cdf0', bark: '#1d1526',
     cloud: '#cfc0e4', cloudCrest: '#f0e8ff', crane: '#f4ecff',
-    flags: { stars: 0.25, aurora: 0, moon: 0, cloudSea: 0 },
+    flags: { aurora: 0, cloudSea: 0 },
   },
-  { // 4 — Nascent Soul: starry indigo
-    sky: { top: '#05070f', mid: '#0d1330', horizon: '#2c3a63' },
-    fog: { color: '#33436e', high: '#131a30', density: 0.0078 },
-    light: { dir: [0.56, 0.35, -0.23], color: '#cfe0ff' },   // 77° from the far side, 30° up
+  { // 4 — Nascent Soul: the stars out
+    tod: 0.72,
+    ink: '#070a14',
+    bearing: 112,            // 77°, from the far side
     ambient: '#141c38',
     ground: '#0d1120',
     ridges: ['#070a14', '#0b1020', '#10182c', '#16203a', '#1d2a48'],
-    peaks: ['#070a14', '#0d1424', '#182338'],
-    // Starlight, not sun: a cold thin edge and nothing more.
-    sun: { color: '#b9cdff', power: 0.42 },
-    water: { top: '#0d1330', horizon: '#2c3a63', tint: '#070b18' },
+    water: '#070b18',
     aura: '#6ea8ff',
     robe: '#1e2a52',
     trim: '#6f8fd8',
-    accent: '#6ea8ff',
     blossom: '#e8d0ee', bark: '#0f1320',
     cloud: '#7889b4', cloudCrest: '#b4c4ea', crane: '#e6eeff',
-    flags: { stars: 1, aurora: 0, moon: 0, cloudSea: 0 },
+    flags: { aurora: 0, cloudSea: 0 },
   },
-  { // 5 — Spirit Severing: the great moon
-    sky: { top: '#060a12', mid: '#101a2a', horizon: '#33455c' },
-    fog: { color: '#3c4f66', high: '#18212e', density: 0.0072 },
-    light: { dir: [-0.62, 0.42, -0.36], color: '#dfe8f5' },  // 156°: the moon behind the range
+  { // 5 — Spirit Severing: deep night, the moon behind the range
+    tod: 0.75,
+    ink: '#080d14',
+    bearing: -120,           // 156°: the light comes from behind the peaks
     ambient: '#18222f',
     ground: '#0f151d',
     ridges: ['#080d14', '#0d131c', '#121a24', '#18222e', '#202c3c'],
-    peaks: ['#080d14', '#111925', '#1f2c3c'],
-    // Moonlight rims hard and cold, and it comes from behind the range.
-    sun: { color: '#e8f2ff', power: 0.85 },
-    water: { top: '#101a2a', horizon: '#33455c', tint: '#080d14' },
+    water: '#080d14',
     aura: '#a9c6e8',
     robe: '#24303f',
     trim: '#9fb8d4',
-    accent: '#a9c6e8',
     blossom: '#e6dcea', bark: '#101720',
     cloud: '#8b9cb2', cloudCrest: '#cdddee', crane: '#eef5fc',
-    flags: { stars: 0.6, aurora: 0, moon: 1, cloudSea: 0 },
+    flags: { aurora: 0, cloudSea: 0 },
   },
-  { // 6 — Dao Seeking: aurora
-    // The darkest sky of the eight, so the skyline has to be lifted a little
-    // and the far rank pushed down to keep the range readable against it.
-    sky: { top: '#03080c', mid: '#07161c', horizon: '#1a4d4b' },
-    fog: { color: '#2a5f5c', high: '#0b2020', density: 0.0066 },
-    light: { dir: [-0.42, 0.30, 0.20], color: '#c8ffe8' },   // 100°, 33° up
+  { // 6 — Dao Seeking: the last of the night, and the aurora up
+    tod: 0.78,
+    ink: '#030a0c',
+    bearing: -64,            // 100°
     ambient: '#0d2228',
     ground: '#08161a',
     ridges: ['#03090c', '#061114', '#0a1c1e', '#0f2829', '#153634'],
-    peaks: ['#030a0c', '#08181a', '#0c2122'],
-    sun: { color: '#9effd8', power: 0.70 },
-    water: { top: '#07161c', horizon: '#1a4d4b', tint: '#040c10' },
+    water: '#040c10',
     aura: '#35ffd0',
     robe: '#0f3b3a',
     trim: '#4fe8c4',
-    accent: '#35ffd0',
     blossom: '#d8f2e6', bark: '#08161a',
     cloud: '#6ea295', cloudCrest: '#a8dcc8', crane: '#e0fff4',
-    flags: { stars: 0.8, aurora: 1, moon: 0, cloudSea: 0 },
+    flags: { aurora: 1, cloudSea: 0 },
   },
-  { // 7 — Immortal Ascension: a golden sea of clouds
-    sky: { top: '#1a1408', mid: '#4a3410', horizon: '#f0c874' },
-    fog: { color: '#d5a75c', high: '#6b501c', density: 0.0060 },
-    light: { dir: [0.40, 0.32, -0.11], color: '#fff0c8' },   // 70°, 38° up — the highest of the eight
+  { // 7 — Immortal Ascension: a golden sea of cloud at daybreak
+    // The wheel comes round: the day this realm stands at is dawn again, and
+    // everything gold in the frame is the realm's own ink and cloud, not the
+    // sky's. Ascending at first light is the point.
+    tod: 1.00,
+    ink: '#231a0a',
+    bearing: 105,            // 70°
     ambient: '#52401c',
     ground: '#3a2c10',
     ridges: ['#1c1508', '#261d0b', '#332710', '#443416', '#57431e'],
-    peaks: ['#231a0a', '#3b2c11', '#5f4a20'],
-    sun: { color: '#ffe9a8', power: 1.00 },
-    water: { top: '#4a3410', horizon: '#f0c874', tint: '#2a1e08' },
+    water: '#2a1e08',
     aura: '#ffd76a',
     robe: '#8a6a22',
     trim: '#ffe9a8',
-    accent: '#e8b34b',
     blossom: '#ffe6c0', bark: '#2a1e08',
     cloud: '#ffdfa6', cloudCrest: '#fff6dc', crane: '#fff8e8',
-    flags: { stars: 0.4, aurora: 0, moon: 0, cloudSea: 1 },
+    flags: { aurora: 0, cloudSea: 1 },
   },
 ];
+
+/**
+ * The aurora's own colour, and the reason it is not the accent.
+ *
+ * The curtains are a *background* element, and the art rules forbid a
+ * background element wearing the accent — the accent is what the player's own
+ * qi is, and a sky painted in it makes her light ordinary. This is Dao
+ * Seeking's green, which is close but is the realm's, not hers.
+ */
+export const AURORA_COLOR = '#4fe8c4';
 
 /**
  * The one set of luminance weights in the codebase — Rec. 601.
@@ -222,7 +232,7 @@ export function luminance(hex) {
   return LUMA[0] * ((n >> 16) & 255) + LUMA[1] * ((n >> 8) & 255) + LUMA[2] * (n & 255);
 }
 
-/* ------------------------------------------------------- the day, as a dial */
+/* ------------------------------------------------------------ colour maths */
 
 const hex2 = (n) => Math.round(Math.max(0, Math.min(255, n))).toString(16).padStart(2, '0');
 
@@ -235,33 +245,21 @@ export function mixHex(a, b, t) {
 }
 
 /**
- * Blend two palettes structurally: colours mix, scalars lerp, nested objects
- * and arrays recurse. The result is palette-shaped, so anything that eats a
- * palette eats this without knowing it was made up.
+ * Pull a colour toward its own grey.
  *
- * Luminance is linear in RGB and so is this, which means the value ladder any
- * two neighbouring skies satisfy is satisfied everywhere between them too.
- * That is asserted rather than assumed — see tests/run.js.
+ * Toward its *own* luminance, which is the part that matters: the result has
+ * the same value as what went in, so desaturating a rank of peaks for aerial
+ * perspective cannot accidentally move it up or down the value ladder. Only
+ * the deliberate mix toward the air does that.
  */
-export function blendPalettes(a, b, t) {
-  if (typeof a === 'string') return a.startsWith('#') ? mixHex(a, b, t) : (t < 0.5 ? a : b);
-  if (typeof a === 'number') return a + (b - a) * t;
-  if (Array.isArray(a)) return a.map((v, i) => blendPalettes(v, b[i], t));
-  const out = {};
-  for (const k of Object.keys(a)) out[k] = blendPalettes(a[k], b[k], t);
-  return out;
-}
-
-/**
- * The sky at time `t`, 0 → 1 across the eight realms. The debug scrubber's
- * whole job: one continuous dial over what the game otherwise only ever shows
- * you eight discrete steps of.
- */
-export function paletteAt(t) {
-  const x = Math.max(0, Math.min(1, t)) * (PALETTES.length - 1);
-  const i = Math.min(PALETTES.length - 2, Math.floor(x));
-  const k = x - i;
-  return k === 0 ? PALETTES[i] : blendPalettes(PALETTES[i], PALETTES[i + 1], k);
+export function desaturateHex(hex, amount) {
+  const n = parseInt(hex.slice(1), 16);
+  const r = (n >> 16) & 255;
+  const g = (n >> 8) & 255;
+  const b = n & 255;
+  const l = LUMA[0] * r + LUMA[1] * g + LUMA[2] * b;
+  const k = Math.max(0, Math.min(1, amount));
+  return `#${hex2(r + (l - r) * k)}${hex2(g + (l - g) * k)}${hex2(b + (l - b) * k)}`;
 }
 
 /** Hair and beard change across four brackets of age/lifespan, never raw age. */

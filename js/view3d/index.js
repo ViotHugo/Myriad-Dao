@@ -6,7 +6,8 @@
 
 import * as THREE from 'three';
 import { createEnv, makePostMaterial, displayColor } from './shaders.js';
-import { PALETTES, paletteAt } from './palette.js';
+import { PALETTES } from './palette.js';
+import { timeOfDayAt, lerpDay, nearestTime, aerialTiers } from './time-of-day.js';
 import { CAMERA } from './camera-config.js';
 import { TIERS, resolveTier, createWatchdog } from './quality.js';
 import { createWorld } from './world.js';
@@ -85,6 +86,9 @@ export function createView({ canvas, onTap, onDoubleTap, settings, debug = false
 
   // Rebuildable: a tier change swaps these out wholesale (see setQuality).
   let world = createWorld(env, tier, lighting);
+  // One air. world.js owns the FogExp2 and paints it from the day's horizon
+  // colour; the scene just holds the same instance.
+  scene.fog = world.fog;
   let avatar = createAvatar(env, tier);
   let sect = createSect(env, tier);
   let scenery = createScenery(env, tier);
@@ -133,41 +137,67 @@ export function createView({ canvas, onTap, onDoubleTap, settings, debug = false
     reducedMotion: () => reduced,
   });
 
-  /* ------------------------------------------------------------ palettes */
+  /* -------------------------------------------------- the realm, and the day */
+  //
+  // Two axes, and each has exactly one owner:
+  //
+  //   the realm  — ink, ridges, cloud, robe, aura. palette.js.
+  //   the day    — sky, air, exposure, bloom, where the sun stands and what
+  //                colour it is. time-of-day.js.
+  //
+  // The game drives both: a realm carries a `tod`, the position on the day it
+  // stands at, and the eight of them walk one full day from first light to
+  // daybreak. The QA scrubber can hold the day still while the game goes on
+  // changing realms underneath it, which is the whole point of it — a
+  // composition that only works at dusk is a coincidence, not a composition.
 
   let realmShown = -1;
-  let transition = 0; // 1 -> 0 while a realm change settles
+  let transition = 0;  // 1 -> 0 while a realm change settles
+  let day = PALETTES[0].tod;
+  /** 0..1 on the QA scrubber, or null for "the game decides the hour". */
+  let dayOverride = null;
+
+  /** The day the scene is actually being painted at. */
+  const dayNow = () => (dayOverride === null ? day : dayOverride);
+  const todNow = () => timeOfDayAt(dayNow());
 
   // Every colour the scene modules read, held as live THREE.Colors that are
-  // lerped toward the target realm each frame. The list has to be complete:
+  // lerped toward the target each frame. The list has to be complete:
   // whatever is missing here silently falls back to whatever hex the material
   // was constructed with, and the palette entry may as well not exist. That is
   // exactly what happened to `cloud`, `crest`, `crane`, `blossom` and `bark` —
   // authored per realm, wired nowhere, so the sea of cloud stayed the same
   // slate grey through all eight skies.
-  const LIVE_COLORS = ['robe', 'trim', 'aura', 'accent', 'bark', 'blossom', 'cloud',
+  const LIVE_COLORS = ['robe', 'trim', 'aura', 'bark', 'blossom', 'cloud',
     'cloudCrest', 'crane'];
   const live = {
     ridges: PALETTES[0].ridges.map(() => new THREE.Color()),
-    peaks: PALETTES[0].peaks.map(() => new THREE.Color()),
+    // Near, mid, far. Derived from the realm's ink and the day's air rather
+    // than authored, so the ranks cannot be tuned against one sky and go flat
+    // in the other three.
+    peaks: [new THREE.Color(), new THREE.Color(), new THREE.Color()],
     sun: { color: new THREE.Color(), power: 0.6 },
+    // The day's accent — the colour a thing that is *emitting* has to be to
+    // still read against this sky. Foreground only.
+    accent: new THREE.Color(),
   };
   for (const k of LIVE_COLORS) live[k] = new THREE.Color();
   const scratch = new THREE.Color();
 
-  function pushLive(p, k) {
+  function pushLive(p, tod, k) {
     for (const key of LIVE_COLORS) live[key].lerp(scratch.set(p[key]), k);
     p.ridges.forEach((c, i) => live.ridges[i].lerp(scratch.set(c), k));
-    p.peaks.forEach((c, i) => live.peaks[i].lerp(scratch.set(c), k));
-    live.sun.color.lerp(scratch.set(p.sun.color), k);
-    live.sun.power += (p.sun.power - live.sun.power) * k;
+    aerialTiers(p.ink, tod.horizon).forEach((c, i) => live.peaks[i].lerp(scratch.set(c), k));
+    live.sun.color.lerp(scratch.set(tod.sun), k);
+    live.sun.power += (tod.sunPower - live.sun.power) * k;
+    live.accent.lerp(scratch.set(tod.accent), k);
     avatar.setPalette(live);
     sect.setPalette(live);
     scenery.setPalette(live);
     effects.setPalette(live);
   }
 
-  /** The realm's own palette, clamped — the sky the game says we are under. */
+  /** The realm's own palette, clamped — the ink the game says we are drawn in. */
   const realmPalette = () => PALETTES[Math.max(0, Math.min(PALETTES.length - 1, realmShown))];
 
   function setRealm(realm, instant = false) {
@@ -175,21 +205,31 @@ export function createView({ canvas, onTap, onDoubleTap, settings, debug = false
     realmShown = realm;
     // While the debug scrubber holds the sky, the game may still break through
     // a realm underneath it. Remember which one; do not repaint over the dial.
-    if (timeOverride !== null) return;
+    if (dayOverride !== null) return;
     if (instant) {
-      world.applyPalette(realmPalette(), true);
-      pushLive(realmPalette(), 1);
-      transition = 0;
+      day = realmPalette().tod;
+      paintNow(realmPalette(), todNow());
     } else {
       transition = 1;
     }
   }
 
-  /** Paint a palette on with no transition — used by the scrubber and by capture. */
-  function paintNow(p) {
-    world.applyPalette(p, true);
-    pushLive(p, 1);
+  /** Paint on with no transition — used by the scrubber and by capture. */
+  function paintNow(p, tod) {
+    world.applyPalette(p, tod, true);
+    pushLive(p, tod, 1);
+    applyAtmosphere();
     transition = 0;
+  }
+
+  /**
+   * The two dials that live outside the scene graph. Read off the world's own
+   * eased values every frame rather than set at the ends of a transition, or
+   * the exposure would step while the sky was still fading.
+   */
+  function applyAtmosphere() {
+    renderer.toneMappingExposure = world.atmosphere.exposure;
+    post.setBloomStrength(world.atmosphere.bloom);
   }
 
   /* ----------------------------------------------------------- minigames */
@@ -274,7 +314,6 @@ export function createView({ canvas, onTap, onDoubleTap, settings, debug = false
   const watchdog = createWatchdog((next) => setQuality(next));
 
   // QA state. All three are inert unless the debug harness touches them.
-  let timeOverride = null;   // 0..1 on the scrubber, or null for "the game decides"
   let poseOverride = null;   // a debug preset holding the camera
   let wantFraming = 'world'; // the framing the game last asked for
   let capturing = false;
@@ -305,10 +344,10 @@ export function createView({ canvas, onTap, onDoubleTap, settings, debug = false
     scenery = createScenery(env, tier);
     effects = createEffects(env, tier);
     scene.add(world.group, avatar.group, sect.group, scenery.group, effects.group);
+    scene.fog = world.fog;
     // Repaint the new geometry with the sky we are actually under — which is
     // the scrubber's, if QA is holding one.
-    if (timeOverride !== null) paintNow(paletteAt(timeOverride));
-    else if (realmShown >= 0) { world.applyPalette(realmPalette(), true); pushLive(realmPalette(), 1); }
+    paintNow(realmPalette(), todNow());
     if (vmCache) { avatar.sync(vmCache, RARITY_COLORS); sect.sync(vmCache); scenery.sync(vmCache); }
     setWireframe(wireframe);
   }
@@ -352,13 +391,18 @@ export function createView({ canvas, onTap, onDoubleTap, settings, debug = false
     env.uTime.value = clock;
     renderer.info.reset();
 
-    if (transition > 0 && realmShown >= 0 && timeOverride === null) {
+    if (transition > 0 && realmShown >= 0 && dayOverride === null) {
       const p = PALETTES[realmShown];
       const k = Math.min(1, dt * 1.1);
-      world.applyPalette(p, false, k);
-      pushLive(p, k);
+      // The hour eases along with everything else, the short way round the
+      // clock — so a breakthrough is a change of light, not a cut to one.
+      day = lerpDay(day, p.tod, k);
+      const tod = todNow();
+      world.applyPalette(p, tod, false, k);
+      pushLive(p, tod, k);
+      applyAtmosphere();
       transition = Math.max(0, transition - dt / 3);
-      if (transition === 0) { world.applyPalette(p, true); pushLive(p, 1); }
+      if (transition === 0) { day = p.tod; paintNow(p, todNow()); }
     }
 
     rig.update(dt);
@@ -464,12 +508,16 @@ export function createView({ canvas, onTap, onDoubleTap, settings, debug = false
     });
   }
 
-  /** Hold the sky at a point on the 0→1 dial. `null` hands it back to the game. */
+  /**
+   * Hold the day at a point on the 0→1 dial — dawn, day, sunset, night, and
+   * round to dawn again. `null` hands the hour back to the game.
+   *
+   * This is the instrument the whole stage-2 data model exists for: every art
+   * call from here on has to survive being scrubbed across it.
+   */
   function setTimeOfDay(t) {
-    timeOverride = t === null || t === undefined ? null : Math.max(0, Math.min(1, t));
-    paintNow(timeOverride === null
-      ? (realmShown >= 0 ? realmPalette() : PALETTES[0])
-      : paletteAt(timeOverride));
+    dayOverride = t === null || t === undefined ? null : Math.max(0, Math.min(1, t));
+    paintNow(realmShown >= 0 ? realmPalette() : PALETTES[0], todNow());
   }
 
   /** Hold the camera at a debug preset. `null` returns it to the game's framing. */
@@ -498,7 +546,13 @@ export function createView({ canvas, onTap, onDoubleTap, settings, debug = false
       bufferHeight: Math.round(buf.y),
       grayscale: postMat.uniforms.uGrayscale.value > 0,
       wireframe,
-      timeOfDay: timeOverride,
+      /** What the scrubber is holding, or null when the game owns the hour. */
+      timeOfDay: dayOverride,
+      /** Where on the day the frame is actually being painted, and its name. */
+      day: dayNow(),
+      dayName: nearestTime(dayNow()).label,
+      exposure: renderer.toneMappingExposure,
+      fogDensity: world.fog.density,
       realm: realmShown,
       pose: rig.pose,
     };

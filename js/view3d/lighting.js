@@ -141,10 +141,11 @@ export function createLighting(env) {
    */
   function apply(cur) {
     // The sun. `cur.dir` points *at* the light, which is the convention the
-    // ink shaders use, so the light stands that far along it.
+    // ink shaders use, so the light stands that far along it. Its bearing is
+    // the realm's and its elevation is the day's; world.js composes the two.
     sunDir.copy(cur.dir).normalize();
     sun.position.copy(ISLAND.center).addScaledVector(sunDir, ISLAND.distance);
-    sun.color.copy(cur.light);
+    sun.color.copy(cur.sunColor);
     sun.intensity = SUN_INTENSITY * cur.sunPower;
     sun.target.position.copy(ISLAND.center);
 
@@ -154,9 +155,10 @@ export function createLighting(env) {
     bounce.groundColor.copy(cur.ground);
 
     // The rim. It keeps its authored geometry — a light aimed at her does not
-    // move when the sun does — and takes the realm's own light colour, so the
-    // moon rims cold and the sunset rims warm.
-    rim.color.copy(cur.sunColor);
+    // move when the sun does — and takes the *day's* rim colour, which is not
+    // always the sun's: at night the only thing standing behind her is the sky,
+    // so the edge of her shoulder goes blue while the moon stays near-white.
+    rim.color.copy(cur.rimColor);
 
     env.uLightDir.value.copy(sunDir);
     env.uLightColor.value.copy(sun.color);

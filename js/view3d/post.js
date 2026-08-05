@@ -29,7 +29,15 @@ import { RenderPass } from '../../vendor/three-addons/postprocessing/RenderPass.
 import { ShaderPass } from '../../vendor/three-addons/postprocessing/ShaderPass.js';
 import { UnrealBloomPass } from '../../vendor/three-addons/postprocessing/UnrealBloomPass.js';
 
-/** The bloom, as three numbers. Gentle: this is ink, not neon. */
+/**
+ * The bloom, as three numbers. Gentle: this is ink, not neon.
+ *
+ * `strength` is the *day* strength and the starting value; the time of day
+ * drives it live (0.40 by day, 0.55 at night). That is not decoration: at an
+ * exposure of 0.75 the handful of bright things left in a night frame — the
+ * moon, the qi, a lantern — are most of what the eye has to read, and a bloom
+ * tuned for noon leaves them as flat dots.
+ */
 export const BLOOM = { threshold: 0.85, strength: 0.4, radius: 0.6 };
 
 /**
@@ -80,6 +88,11 @@ export function createPost({ renderer, scene, camera, postMat, tier }) {
     );
   }
 
+  /** The day turning the bloom up as the light goes. Lerped, never switched. */
+  function setBloomStrength(strength) {
+    bloom.strength = strength;
+  }
+
   function setTier(next) {
     bloom.enabled = !!next.bloom;
     const samples = next.msaa || 0;
@@ -92,8 +105,9 @@ export function createPost({ renderer, scene, camera, postMat, tier }) {
   }
 
   function render(dt) {
-    // Exposure lives on the renderer so there is one dial, and time of day
-    // will be turning it in the next stage.
+    // Exposure lives on the renderer so there is one dial. The time of day
+    // turns it; this pass only reads it, every frame, so the two can never
+    // drift apart.
     postMat.uniforms.uExposure.value = renderer.toneMappingExposure;
     composer.render(dt);
   }
@@ -104,5 +118,8 @@ export function createPost({ renderer, scene, camera, postMat, tier }) {
     grade.dispose();
   }
 
-  return { composer, renderPass, bloom, grade, render, setSize, setTier, dispose };
+  return {
+    composer, renderPass, bloom, grade,
+    render, setSize, setTier, setBloomStrength, dispose,
+  };
 }
