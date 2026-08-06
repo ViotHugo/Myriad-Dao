@@ -14,6 +14,7 @@
 import * as THREE from 'three';
 import { mulberry32 } from '../rng.js';
 import { applyTint } from './rock.js';
+import { PLATFORM, stepTop } from './platform-plan.js';
 
 /* ------------------------------------------------------------- the steps */
 
@@ -25,6 +26,11 @@ import { applyTint } from './rock.js';
  * mountain path looks like and also means the geometry never has to agree with
  * the relief under it. Six points per outline, jittered per step from its own
  * seed, so no two treads share a silhouette.
+ *
+ * Each tread's height comes from `stepTop()`, which seats it on the rock
+ * directly under it — the platform's own relief included. Authored as an
+ * absolute world height instead, the flight ended up buried: see the note on
+ * `STEPS` in platform-plan.js.
  */
 export function stepsGeometry(steps) {
   const pos = [];
@@ -42,24 +48,25 @@ export function stepsGeometry(steps) {
       const lz = Math.sin(a) * (s.d / 2) * wear;
       const c = Math.cos(s.yaw);
       const sn = Math.sin(s.yaw);
-      plan.push([s.at[0] + lx * c - lz * sn, s.at[2] + lx * sn + lz * c]);
+      plan.push([s.at[0] + lx * c - lz * sn, s.at[1] + lx * sn + lz * c]);
     }
 
-    const top = pos.length / 3;
-    for (const [x, z] of plan) pos.push(x, s.at[1] + (rand() - 0.5) * 0.05, z);
+    const tread = stepTop(s);
+    const first = pos.length / 3;
+    for (const [x, z] of plan) pos.push(x, tread + (rand() - 0.5) * 0.05, z);
     // The base is flared. A prism with vertical sides is a crate, and six of
     // them along a skyline read as cargo rather than as a path — the batter is
     // what says the tread was cut out of the rock it is standing on.
     const bot = pos.length / 3;
     for (const [x, z] of plan) {
-      pos.push(s.at[0] + (x - s.at[0]) * 1.32, s.at[1] - s.h, s.at[2] + (z - s.at[2]) * 1.32);
+      pos.push(s.at[0] + (x - s.at[0]) * 1.32, tread - s.h, s.at[1] + (z - s.at[1]) * 1.32);
     }
     // The tread, as a fan.
-    for (let i = 1; i < sides - 1; i++) idx.push(top, top + i, top + i + 1);
+    for (let i = 1; i < sides - 1; i++) idx.push(first, first + i, first + i + 1);
     // The riser.
     for (let i = 0; i < sides; i++) {
       const j = (i + 1) % sides;
-      idx.push(top + i, bot + i, top + j, top + j, bot + i, bot + j);
+      idx.push(first + i, bot + i, first + j, first + j, bot + i, bot + j);
     }
   }
 
@@ -73,7 +80,7 @@ export function stepsGeometry(steps) {
   // the figure — dark treads on dark rock are simply not there. Polished by
   // feet, the treads come out at roughly twice the platform's albedo and the
   // risers stay in shadow, which is the only reading the path gets.
-  applyTint(g, { top: 1.65, bottom: 0.68, from: 0.55, to: -0.3 });
+  applyTint(g, { top: 1.65, bottom: 0.68, from: PLATFORM.top + 0.5, to: PLATFORM.top - 0.4 });
   return g;
 }
 

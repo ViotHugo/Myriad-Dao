@@ -51,6 +51,7 @@
 
 import { mulberry32 } from '../rng.js';
 import { placeAtDepth } from './framing.js';
+import { surfaceAt } from './platform-plan.js';
 
 /* ------------------------------------------------------------ tiny vectors */
 
@@ -80,14 +81,22 @@ export function turnBetween(a, b) {
  *
  * `tilt` and `lean` throw it out over the fall, which is what an old plum on a
  * cliff shoulder does and what puts its crown clear of the range behind it.
+ *
+ * `at` is a plan position and the height comes from `surfaceAt()`, like the
+ * censer and the standing rocks. It used to be a hand-tuned −0.05 chosen to look
+ * right against a platform whose top was secretly 0.30 higher than anyone
+ * thought, so the whole root flare was underground.
  */
 export const PLUM = {
-  at: [-6.90, -0.05, -6.40],
+  at: [-6.90, -6.40],
   yaw: 2.20,
   tilt: 0.10,
   lean: 0.20,
   scale: 1.26,
 };
+
+/** Where the trunk actually meets the rock. */
+export const plumSeat = () => [PLUM.at[0], surfaceAt(PLUM.at[0], PLUM.at[1]), PLUM.at[1]];
 
 /**
  * The trunk: five lengths, and a hard turn at each of the four joints.

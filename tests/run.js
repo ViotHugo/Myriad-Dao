@@ -22,9 +22,16 @@ import {
   PALETTES, luminance, LUMA, mixHex, desaturateHex, AURORA_COLOR, foregroundInk,
 } from '../js/view3d/palette.js';
 import {
-  PLATFORM, platformOutline, stoneOutline, topRelief, symmetryScore, STEPS, CENSER, SMOKE,
+  // `SEAT` is already taken in this file by cloud-plan's — the sea's seat, not
+  // the cultivator's.
+  PLATFORM, STONE, SEAT as ISLAND_SEAT, STONE_PROUD, platformOutline, stoneOutline, topRelief,
+  surfaceAt, symmetryScore, STEPS, stepTop, CENSER, SMOKE,
 } from '../js/view3d/platform-plan.js';
-import { PLUM, plumSkeleton, framingBranch, turnBetween } from '../js/view3d/plum-plan.js';
+import { PLUM, plumSeat, plumSkeleton, framingBranch, turnBetween } from '../js/view3d/plum-plan.js';
+// The vendored library, by path: the suite has no bundler and no node_modules,
+// and one fact in stage 5 — where ExtrudeGeometry puts its bevel — is three's
+// rather than ours, so it is driven against the real thing.
+import * as THREE from '../vendor/three.module.min.js';
 import {
   TIMES, timeOfDayAt, nearestTime, wrapDay, lerpDay, sunDirection, aerialTiers, AERIAL,
 } from '../js/view3d/time-of-day.js';
@@ -3114,6 +3121,114 @@ section('Stage 5 — the platform, and the symmetry it has to not have');
   ))());
 }
 
+section('Stage 5 — the seat, and where ExtrudeGeometry actually puts its bevel');
+{
+  const rock = readFileSync(new URL('../js/view3d/rock.js', import.meta.url), 'utf8');
+  const wrl = readFileSync(new URL('../js/view3d/world.js', import.meta.url), 'utf8');
+
+  // The one fact in this stage that belongs to three rather than to us, driven
+  // against the real vendored library: get it wrong and nothing throws, the
+  // island just floats a third of a unit above where every other module
+  // believes it is.
+  const slabExtent = (depth, bevelThickness) => {
+    const shape = new THREE.Shape([[10, 0], [0, 10], [-10, 0], [0, -10]]
+      .map(([x, y]) => new THREE.Vector2(x, y)));
+    const g = new THREE.ExtrudeGeometry(shape, {
+      depth,
+      curveSegments: 1,
+      steps: 1,
+      bevelEnabled: true,
+      bevelThickness,
+      bevelSize: 0.4,
+      bevelOffset: 0,
+      bevelSegments: 2,
+    });
+    g.rotateX(Math.PI / 2);
+    g.translate(0, -bevelThickness, 0);
+    g.computeBoundingBox();
+    return g.boundingBox;
+  };
+
+  check('the bevel is added OUTSIDE depth, at both ends', (() => {
+    // Not "cut inside it", which is what this file used to claim. A slab asked
+    // for depth 3.5 with a 0.30 bevel comes back 4.1 deep.
+    const shape = new THREE.Shape([[10, 0], [0, 10], [-10, 0], [0, -10]]
+      .map(([x, y]) => new THREE.Vector2(x, y)));
+    const g = new THREE.ExtrudeGeometry(shape, {
+      depth: 3.5,
+      curveSegments: 1,
+      steps: 1,
+      bevelEnabled: true,
+      bevelThickness: 0.3,
+      bevelSize: 0.4,
+      bevelOffset: 0,
+      bevelSegments: 2,
+    });
+    g.computeBoundingBox();
+    return near(g.boundingBox.min.z, -0.3) && near(g.boundingBox.max.z, 3.8);
+  })());
+
+  check('so a slab has to be pushed down by its own bevel to sit on its origin',
+    [[PLATFORM.depth, PLATFORM.bevel.thickness], [STONE.depth, STONE.bevel.thickness]]
+      .every(([d, bt]) => {
+        const box = slabExtent(d, bt);
+        return near(box.max.y, 0) && near(box.min.y, -(d + 2 * bt));
+      }));
+
+  check('and slabGeometry does exactly that', /geo\.translate\(0, -bevel\.thickness, 0\)/.test(rock));
+
+  check('the cultivator sits on rock rather than inside it', (() => {
+    // characterAnchor is [0, 0, 0] and the avatar's own lowest vertex is its
+    // y = 0, so anything authored above SEAT where she sits is a figure that
+    // reads short. It measured 10.2% of frame height against a contract of
+    // 13.5% while the stone's top face was at +0.42.
+    const anchor = CAMERA.composition.characterAnchor;
+    return ISLAND_SEAT === anchor[1]
+      && surfaceAt(anchor[0], anchor[2]) < ISLAND_SEAT
+      && /stone\.position\.y = SEAT/.test(wrl);
+  })());
+
+  check('the stone stands proud of the platform, and the platform hangs off it', (() => {
+    // Under *her* — the rim is allowed to stand higher than the seat, and does:
+    // the relief swings +0.38 out at the edge, which is a broken terrace rather
+    // than a table. What may not happen is rock above the seat where she is,
+    // and the relief is faded to nothing inside r/R < 0.34 for exactly that.
+    const seated = [[0, 0], [1.5, 1.5], [-2, 1], [2, -2]]
+      .every(([x, z]) => surfaceAt(x, z) < ISLAND_SEAT);
+    return STONE_PROUD > 0.1 && STONE_PROUD < 0.4
+      && near(PLATFORM.top, ISLAND_SEAT - STONE_PROUD)
+      && seated;
+  })());
+
+  check('there is still rock to see between the rim and her feet', (() => {
+    // Every unit the stone stands proud is a unit the whole platform drops, and
+    // the strip closes entirely at about −0.60.
+    const feet = frameOf(CAMERA.composition.characterAnchor).v;
+    const plan = platformOutline();
+    let rim = 0;
+    for (let i = 0; i < plan.length; i++) {
+      const [ax, az] = plan[i];
+      const [bx, bz] = plan[(i + 1) % plan.length];
+      for (let t = 0; t < 1; t += 0.04) {
+        const x = ax + (bx - ax) * t;
+        const z = az + (bz - az) * t;
+        const f = frameOf([x, surfaceAt(x, z), z]);
+        if (f.behind || f.u < 0 || f.u > 1 || f.v > 0.68) continue;
+        rim = Math.max(rim, f.v);
+      }
+    }
+    return feet - rim > 0.02;
+  })());
+
+  check('nothing on the island seats itself any other way', (() => (
+    // Four different answers to "what am I standing on" is how three of the
+    // four ended up underground. surfaceAt() is the only one now.
+    /censerAt = \[CENSER\.at\[0\], surfaceAt\(/.test(wrl)
+    && /v\.set\(x, surfaceAt\(x, z\) \+ h - 0\.35, z\)/.test(wrl)
+    && /plumSeat\(\)/.test(readFileSync(new URL('../js/view3d/scenery.js', import.meta.url), 'utf8'))
+  ))());
+}
+
 section('Stage 5 — the set dressing, against the locked camera');
 {
   const plan = platformOutline();
@@ -3133,14 +3248,39 @@ section('Stage 5 — the set dressing, against the locked camera');
     return pts[lo].r + (pts[hi].r - pts[lo].r) * (t / da);
   };
 
+  /** A tread's top, in world space — the same arithmetic props.js builds it at. */
+  const treadAt = (s) => [s.at[0], stepTop(s), s.at[1]];
+
   check('no tread overhangs the rock it is cut into', STEPS.every((s) => (
-    Math.hypot(s.at[0], s.at[2]) + Math.max(s.w, s.d) / 2 < outlineAt(s.at[0], s.at[2]) - 0.4
+    Math.hypot(s.at[0], s.at[1]) + Math.max(s.w, s.d) / 2 < outlineAt(s.at[0], s.at[1]) - 0.4
   )));
 
-  check('the flight descends', STEPS.every((s, i) => i === 0 || s.at[1] < STEPS[i - 1].at[1]));
+  check('the flight is a stair: every tread stands on the rock, by a descending amount', (() => (
+    // The invariant that catches the bug that was here. Four of six treads were
+    // *below their own surface* — a flight of steps buried in the rock it is
+    // cut into — because they were authored as absolute world heights against a
+    // platform whose real top was 0.30 higher than the code believed.
+    STEPS.every((s) => s.proud > 0.05)
+    && STEPS.every((s, i) => i === 0 || s.proud < STEPS[i - 1].proud)
+    && STEPS.every((s) => stepTop(s) > surfaceAt(s.at[0], s.at[1]))
+  ))());
+
+  check('and it climbs the shoulder before it drops away', (() => {
+    // Not a monotone descent in world y, and it should not be: the rim relief
+    // swings +-0.42 under the path, so it goes up over the high point at 260°
+    // and down the far side. What descends is its height above the rock.
+    const v = STEPS.map((s) => frameOf(treadAt(s)).v);
+    return v[0] > v[2] && v[5] > v[2];
+  })());
+
+  check('every tread stays seated whatever the relief does under it', STEPS.every((s) => (
+    // `h` is the depth of the prism, and the rim relief swings ±0.42 — a tread
+    // whose base clears the surface is a slab floating over a hole.
+    stepTop(s) - s.h < surfaceAt(s.at[0], s.at[1]) - 0.4
+  )));
 
   check('and it leads off the frame', (() => {
-    const us = STEPS.map((s) => frameOf(s.at).u);
+    const us = STEPS.map((s) => frameOf(treadAt(s)).u);
     // It starts clear of the cultivator at u 0.44 and the last tread is past
     // the edge of the picture — that is the whole point of it being there.
     return Math.min(...us) > 0.55 && Math.max(...us) > 1.05;
@@ -3151,29 +3291,46 @@ section('Stage 5 — the set dressing, against the locked camera');
     // camera, so the only reading a path gets at this scale is as a break in
     // the silhouette. Measured against the rim at each tread's own bearing.
     const breaks = STEPS.filter((s) => {
-      const a = Math.atan2(s.at[2], s.at[0]);
-      const R = outlineAt(s.at[0], s.at[2]);
+      const a = Math.atan2(s.at[1], s.at[0]);
+      const R = outlineAt(s.at[0], s.at[1]);
       const rx = Math.cos(a) * R;
       const rz = Math.sin(a) * R;
-      return frameOf(s.at).v <= frameOf([rx, topRelief(rx, rz), rz]).v + 1e-4;
+      return frameOf(treadAt(s)).v <= frameOf([rx, surfaceAt(rx, rz), rz]).v + 1e-4;
     });
     return breaks.length >= 4;
-  })(), `${STEPS.filter(() => true).length} treads`);
+  })(), `${STEPS.length} treads`);
 
   check('the censer stands on the platform, clear of the figure and of the UI', (() => {
-    const f = frameOf([CENSER.at[0], topRelief(CENSER.at[0], CENSER.at[2]), CENSER.at[2]]);
+    const f = frameOf([CENSER.at[0], surfaceAt(CENSER.at[0], CENSER.at[1]), CENSER.at[1]]);
     const anchor = CAMERA.composition.anchorU;
-    return Math.hypot(CENSER.at[0], CENSER.at[2]) < outlineAt(CENSER.at[0], CENSER.at[2]) - 1
+    return Math.hypot(CENSER.at[0], CENSER.at[1]) < outlineAt(CENSER.at[0], CENSER.at[1]) - 1
       && f.u > anchor + 0.2 && f.u < 1
       && f.v > CAMERA.safeZone.top && f.v < 1 - CAMERA.safeZone.bottom;
   })());
 
+  check('and it stands *on* it — the whole vessel is above the rock', (() => {
+    // Its base used to be seated on bare `topRelief`, which is a lift and not a
+    // height, so the bottom 0.30 of a 0.62-tall burner was underground.
+    const base = surfaceAt(CENSER.at[0], CENSER.at[1]);
+    return base < ISLAND_SEAT && CENSER.height > 0.3 && near(base, PLATFORM.top);
+  })());
+
   check('its smoke rises into open sky above the near band', (() => {
+    const base = surfaceAt(CENSER.at[0], CENSER.at[1]);
     const top = frameOf([
-      CENSER.at[0] + SMOKE.lean[0], CENSER.at[1] + CENSER.height + SMOKE.height,
-      CENSER.at[2] + SMOKE.lean[1],
+      CENSER.at[0] + SMOKE.lean[0], base + CENSER.height + SMOKE.height,
+      CENSER.at[1] + SMOKE.lean[1],
     ]);
     return top.v < horizonV() && top.u > 0 && top.u < 1;
+  })());
+
+  check('the plum grows out of the rock, not through it', (() => {
+    // Its root flare dips just under the surface and the trunk starts on it.
+    // The old seat was a hand-tuned −0.05 against a platform whose real top was
+    // 0.30 higher, so all four root stubs were buried.
+    const seat = plumSeat();
+    return near(seat[1], surfaceAt(PLUM.at[0], PLUM.at[1]))
+      && Math.hypot(seat[0], seat[2]) < outlineAt(seat[0], seat[2]) - 0.6;
   })());
 }
 

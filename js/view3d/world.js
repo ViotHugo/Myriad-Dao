@@ -12,7 +12,8 @@ import { sunDirection } from './time-of-day.js';
 import { createCloudSea } from './cloud-sea.js';
 import { TERRAIN, TARN, terrainField, terrainHeight } from './terrain-plan.js';
 import {
-  PLATFORM, platformOutline, stoneOutline, topRelief, STEPS, CENSER, SMOKE,
+  PLATFORM, STONE, SEAT, platformOutline, stoneOutline, topRelief, surfaceAt,
+  STEPS, CENSER, SMOKE,
 } from './platform-plan.js';
 import { stepsGeometry, censerGeometry, smokeGeometry } from './props.js';
 import { pineGeometry } from './trees.js';
@@ -283,16 +284,23 @@ export function createWorld(env, tier, lighting) {
   // A meditation stone, slightly proud of the shelf — a seven-point plan rather
   // than the nine-sided cylinder that used to sit concentrically inside the
   // seven-sided one.
+  //
+  // Its top face *is* the seat: `slabGeometry` puts that at the mesh's own
+  // origin, so this stands at SEAT and the cultivator sits on it rather than a
+  // quarter of the way inside it. It used to be at +0.32, on top of a slab whose
+  // own top was another +0.10 above that — 0.42 of a 1.71-tall figure
+  // underground, which is why she measured 10.2% of frame height against a
+  // contract that says 13.5%.
   const stoneMat = makeInkMaterial(env, { color: '#242a33', rim: 0.10, bands: 3, flat: true, tint: true });
   const stone = new THREE.Mesh(slabGeometry({
     outline: stoneOutline(),
-    depth: 0.78,
-    bevel: { thickness: 0.10, size: 0.14, segments: 1 },
-    chip: 0.04,
+    depth: STONE.depth,
+    bevel: STONE.bevel,
+    chip: STONE.chip,
     seed: 61,
-    tint: { top: 1.2, bottom: 0.66, from: 0, to: -0.78 },
+    tint: { top: 1.2, bottom: 0.66, from: 0, to: -STONE.depth },
   }), stoneMat);
-  stone.position.y = 0.32;
+  stone.position.y = SEAT;
   stone.castShadow = true;
   stone.receiveShadow = true;
   group.add(stone);
@@ -310,7 +318,7 @@ export function createWorld(env, tier, lighting) {
   // The treads and the censer go into one buffer for the same reason the
   // platform and its skirt do: same material, nothing moves, and the two of
   // them together are one draw call instead of two.
-  const censerAt = [CENSER.at[0], topRelief(CENSER.at[0], CENSER.at[2]), CENSER.at[2]];
+  const censerAt = [CENSER.at[0], surfaceAt(CENSER.at[0], CENSER.at[1]), CENSER.at[1]];
   const censerGeo = censerGeometry({ radius: CENSER.radius, height: CENSER.height });
   censerGeo.rotateY(CENSER.yaw);
   censerGeo.translate(censerAt[0], censerAt[1], censerAt[2]);
@@ -356,8 +364,13 @@ export function createWorld(env, tier, lighting) {
       const r = 5.2 + rrand() * 3.4;
       const h = 0.7 + rrand() * 2.1;
       const rad = 0.35 + rrand() * 0.6;
-      // The crag hangs below its origin, so it is placed by its crown.
-      v.set(Math.cos(a) * r, h - 0.35, Math.sin(a) * r);
+      const x = Math.cos(a) * r;
+      const z = Math.sin(a) * r;
+      // The crag hangs below its origin, so it is placed by its crown — and
+      // bedded a third of a unit into whatever the rock under it is actually
+      // doing. It used to be bedded into a hardcoded zero, which was 0.65 below
+      // the surface once the platform's bevel was accounted for.
+      v.set(x, surfaceAt(x, z) + h - 0.35, z);
       q.setFromEuler(new THREE.Euler((rrand() - 0.5) * 0.25, rrand() * 3, (rrand() - 0.5) * 0.25));
       sc.set(rad, h, rad);
       rocks.setMatrixAt(i, m.compose(v, q, sc));

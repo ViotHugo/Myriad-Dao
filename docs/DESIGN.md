@@ -776,8 +776,57 @@ Two things fought that, and neither was in the palette:
   triangles between the outline points, each tipped a different way. Smoothed,
   they average into one even grey.
 
-Grayscale, after: foreground band **24 / 30 / 28 / 7** at dawn, day, sunset and
-night, against a midground of 62 / 98 / 75 / 30 and peaks at 76 / 133 / 97 / 24.
+Grayscale, after: foreground band **34 / 38 / 40 / 9** at dawn, day, sunset and
+night, against a midground of 63 / 100 / 76 / 30 and peaks at 76 / 133 / 97 / 24.
+(It measured 24 / 30 / 28 / 7 before the seat was fixed below — dropping the
+island half a unit puts more of its *lit top face* in frame and less of its black
+underside, which is a truer picture and a slightly paler number.)
+
+**Where `ExtrudeGeometry` actually puts its bevel.** `slabGeometry` asked for
+`depth: 3.5, bevelThickness: 0.30` and this file's own comment claimed the bevel
+was "cut inside it". It is not: three adds it **outside `depth`, at both ends**,
+so the solid comes back 4.1 deep spanning z = −0.30 … 3.80, and after the rotate
+that lays it down its top face sits at y = **+0.30** rather than on the origin.
+Nothing throws and nothing looks broken — the island simply floats a third of a
+unit above where every other module believes it is.
+
+What it cost, and none of it was visible as a bug:
+
+- The composition contract puts the cultivator's feet at exactly y = 0 and the
+  avatar's own lowest vertex is its y = 0. The meditation stone's top face was at
+  +0.42 (its own bevel on top of a `position.y` of 0.32), so her lower quarter
+  was inside the rock and she measured **10.2% of frame height against a contract
+  that says 13.5%** — the one number in the contract the suite could not check,
+  because it checks the *arithmetic* of the framing and not what the rock does.
+- The censer was seated on bare `topRelief()`, which is a lift and not a height,
+  so the bottom half of a 0.62-tall burner was underground.
+- The plum's seat was a hand-tuned −0.05, chosen by eye against the wrong
+  surface, so its whole root flare was buried.
+- The steps were absolute world heights tuned the same way. Measured properly,
+  **four of the six were below their own surface** — a flight of steps buried in
+  the rock it is cut into. Re-tuning by eye had pushed them lower still, because
+  what was actually visible was the two treads poking through a rim that was
+  covering the other four.
+
+Four different answers to "what am I standing on", three of them underground, and
+every one individually plausible. There is one now: `surfaceAt(x, z)` in
+`platform-plan.js`, and `SEAT` is the height it has to stay under where she sits.
+The stone's top face *is* the seat, so the platform hangs `STONE_PROUD` below it
+— and that is not free, because every unit the stone stands proud is a unit the
+whole island drops: the strip of rock visible between the rim and her feet is
+3.6% of the frame with the platform at zero, 2.6% at −0.16, and closed entirely
+by −0.60. It is 0.16.
+
+The steps are authored as `proud` — height above the rock directly under them —
+rather than as world heights, which is the only shape of that number that cannot
+drift when the relief is retuned. What that gives up is a monotone descent in
+world y: the rim relief swings ±0.42 under the path, so the flight climbs over
+the shoulder at 260° before dropping away to the right and out of frame, which is
+what a path over a shoulder does.
+
+`tests/run.js` drives the bevel fact against the **real vendored three**, because
+it is a fact about the library rather than about this file, and the day it
+changes the compensating translate is wrong.
 
 **The platform is a drawing, not a primitive.** `platform-plan.js` holds eleven
 points — angles that do not divide the circle, radii that never repeat, and a
@@ -1206,7 +1255,7 @@ A18 pacing table.
 npm run sim          # idle pacing
 npm run sim:active   # sustained tapping
 npm run balance      # assert the A18 table, exit 1 on drift
-npm test             # 481 engine and renderer checks
+npm test             # 492 engine and renderer checks
 ```
 
 `--check` runs both modes across several seeds and fails if any milestone leaves
