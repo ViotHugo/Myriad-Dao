@@ -93,7 +93,7 @@ export const FIGURE = {
 const RINGS = [
   [0.035, 0.648], [0.130, 0.622], [0.240, 0.596], [0.350, 0.575],
   [0.455, 0.556], [0.520, 0.545], [0.610, 0.516], [0.700, 0.472],
-
+];
 /** The mean radius of the garment at a height. Clamped past either end. */
 export function bodyRadius(y) {
   if (y <= RINGS[0][0]) return RINGS[0][1];
