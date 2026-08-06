@@ -43,7 +43,7 @@ import {
   sashTails, cuffs, cuffDrop, figureParts, asymmetryScore, shoulderDropDeg,
   jianAt, jianLength, tasselStrands,
 } from '../js/view3d/figure-plan.js';
-import { specularFrom } from '../js/view3d/shaders.js';
+import { specularFrom } from '../js/view3d/surface.js';
 import { makeNoise3, ridged3 } from '../js/view3d/noise.js';
 import {
   PEAK_MESHES, SCALE_RANGE, peakPlacements, cloudBands,
@@ -1211,6 +1211,40 @@ function importSaveSafe(store) {
 section('Architecture — purity and determinism');
 {
   check('the engine runs with no DOM present', typeof globalThis.document === 'undefined');
+
+  check('nothing this suite imports imports Three', (() => {
+    // CI installs no dependencies — "the engine and its tools are plain ESM" —
+    // so `import * as THREE` anywhere in this file's import closure does not
+    // fail a check, it stops the suite from *starting* and takes the whole run
+    // with it. That is exactly what happened when stage 7 reached into
+    // shaders.js for one pure function; the arithmetic moved to surface.js and
+    // this check is here so the next one is caught in the editor instead of in
+    // a pull request.
+    //
+    // Everything a renderer module knows that the suite needs to assert lives
+    // in a Three-free module — palette, framing, noise, the *-plan files,
+    // surface — or is read as *text* with readFileSync, which is how the
+    // shader sources are checked.
+    const root = new URL('.', import.meta.url);
+    const seen = new Set();
+    const bad = [];
+    const walk = (url) => {
+      if (seen.has(url.href)) return;
+      seen.add(url.href);
+      let src;
+      try { src = readFileSync(url, 'utf8'); } catch { return; }
+      for (const m of src.matchAll(/(?:^|\n)\s*import[^;]*?from\s+'([^']+)'/g)) {
+        const spec = m[1];
+        if (spec.startsWith('.')) walk(new URL(spec, url));
+        // Node's own builtins are always there; a bare specifier is a package,
+        // and there is no package manager anywhere in this project's CI.
+        else if (!spec.startsWith('node:')) bad.push(`${url.href.slice(root.href.length)} imports ${spec}`);
+      }
+    };
+    walk(new URL('run.js', root));
+    if (bad.length) console.log(`      ${bad.join('\n      ')}`);
+    return bad.length === 0;
+  })());
   check('the watchdog drops a tier when frames are slow', (() => {
     let tier = 'high';
     const w = createWatchdog((t) => { tier = t; });

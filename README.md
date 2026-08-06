@@ -10,7 +10,7 @@ framework, no downloaded art. **~1035 KB total**, and installable as a PWA.
 
 ```bash
 npm run serve     # http://localhost:8123
-npm test          # 533 checks
+npm test          # 534 checks
 npm run balance   # assert the A18 pacing table
 npm run sheet     # 4 cameras × 4 skies -> screenshots/contact-sheet.png
 ```
@@ -132,13 +132,14 @@ js/view3d/peak-plan.js   the range as arithmetic: six meshes, and where fourteen
 js/view3d/figure-plan.js the cultivator's garment as arithmetic: pleats, collar,
                          sleeves, sash, and the asymmetry that makes her a person
 js/view3d/garment.js     cloth as geometry — one quad-grid primitive, four ways
+js/view3d/surface.js     roughness → specular lobe, Three-free so the suite can read it
 js/view3d/terrain-plan.js the ground as arithmetic: the long section and its far shore
 js/view3d/noise.js       seeded 3D simplex, and the ridged fractal granite is carved from
 js/view3d/debug.js       the QA harness. Dev-only, dynamically imported, never shipped
 tools/contact-sheet.js   drives a headless browser to shoot the 16-frame sheet
 tools/balance-sim.js     plays the engine headlessly, checks pacing
 tools/make-icons.js      regenerates the PWA icons
-tests/run.js             533 checks
+tests/run.js             534 checks
 docs/DESIGN.md           art direction, performance budget, quality tiers, balance
 ```
 
