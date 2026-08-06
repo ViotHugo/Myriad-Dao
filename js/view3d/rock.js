@@ -100,9 +100,14 @@ function chipAt(x, z, k) {
  * A hand-authored plan, extruded into a slab, with the top face chipped.
  *
  * `outline` is `[x, z]` pairs — the plan, in world units, at the height it will
- * stand at. The extrusion runs *downward* from y = 0 so the top face is the
- * scene's zero and the composition contract does not have to know how thick the
- * rock is.
+ * stand at. The extrusion runs *downward* from y = 0, so the top face is the
+ * mesh's own origin and whoever plants it does not have to know how thick the
+ * rock is or how big its bevel was. See the translate below for why that is a
+ * promise this function has to keep by hand.
+ *
+ * The whole solid spans `y = 0` down to `-(depth + 2 × bevel.thickness)`, and
+ * `slabTopOffset()` is that promise stated as a number for anything that has to
+ * reason about it without a renderer.
  *
  * `relief` is an optional function of (x, z) returning how far that part of the
  * top stands proud. It is applied to the bevel ring as well as to the cap, so
@@ -125,10 +130,25 @@ export function slabGeometry({
     bevelOffset: 0,
     bevelSegments: bevel.segments,
   });
-  // Lying down: the shape's own y becomes world z, and the extrusion runs from
-  // y = 0 down to y = -depth. (Rotating the other way puts the slab above its
-  // own origin and inside out.)
+  // Lying down: the shape's own y becomes world z, and the extrusion runs
+  // downward. (Rotating the other way puts the slab above its own origin and
+  // inside out.)
   geo.rotateX(Math.PI / 2);
+  // And then down by the bevel, which is the one thing about `ExtrudeGeometry`
+  // that has to be said out loud: **the bevel is added outside `depth`, at both
+  // ends.** A slab asked for `depth: 3.5, bevelThickness: 0.30` comes back 4.1
+  // deep, spanning z = -0.30 … 3.80, so after the rotate its top face sits at
+  // y = +0.30 rather than at the origin.
+  //
+  // Nothing throws, and nothing looks wrong either — the platform simply floats
+  // a third of a unit above where every other module believes it is. What that
+  // cost: the composition contract puts the cultivator's feet at exactly y = 0,
+  // so her lower quarter was inside the rock and she measured 10.2% of frame
+  // height against a contract that says 13.5%; half the censer and all of the
+  // plum's root flare were underground for the same reason. Measured against
+  // the real library in tests/run.js, because it is a fact about three rather
+  // than about this file, and the day it changes this line is wrong.
+  geo.translate(0, -bevel.thickness, 0);
 
   const pos = geo.attributes.position;
   const top = -bevel.thickness - 1e-3;

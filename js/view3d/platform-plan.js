@@ -33,26 +33,65 @@
 //   - the irregularity has to be *in that arc*. An outline that is lively on
 //     the camera's side and round at the back is a round platform.
 //   - **nothing below the top plane and beyond the rim can be seen.** The eye
-//     is 2.03 units up and the rim is at y = 0, so the platform's own mass
-//     occludes every point past its edge that sits under it — measured, not
-//     assumed: a flight of steps descending off the back edge is completely
-//     invisible from this camera however carefully it is placed. So the steps
-//     run *across* the top and leave by the side of the frame instead.
+//     is 2.03 units up and the rim is a couple of tenths under it, so the
+//     platform's own mass occludes every point past its edge that sits below it
+//     — measured, not assumed: a flight of steps descending off the back edge is
+//     completely invisible from this camera however carefully it is placed. So
+//     the steps run *across* the top and leave by the side of the frame instead.
 //
 // Pure and Three-free, like the other `*-plan` modules, so the composition can
 // be asserted in Node.
 
-/** The extrusion. `depth` is the whole thickness; the bevel is cut inside it. */
+/**
+ * Where the cultivator's feet are, and therefore where the top of whatever she
+ * is sitting on has to be.
+ *
+ * `CAMERA.composition.characterAnchor` is `[0, 0, 0]` and the avatar's lowest
+ * vertex is its own y = 0, so this is not a preference — it is the number the
+ * whole composition contract is solved from. **Nothing on this island may be
+ * authored above it where she stands**, and for a while everything was: the
+ * platform's top face sat at +0.30 and the meditation stone's at +0.42 (see the
+ * translate in `slabGeometry`), so her lower quarter was inside the rock and she
+ * measured 10.2% of frame height against a contract that says 13.5%.
+ */
+export const SEAT = 0;
+
+/**
+ * How far the meditation stone stands proud of the platform around it.
+ *
+ * It is a low worn slab, not a plinth, and 0.16 is doing two jobs. It has to be
+ * enough to read — at radius 2.7 that is about 1.1% of frame height, ten pixels,
+ * which is a visible kerb. And it may not be much more than that, because the
+ * stone's top *is* the seat, so every unit it stands proud is a unit the whole
+ * platform drops: the strip of rock visible between the rim and her feet is only
+ * 3.6% of the frame with the platform at zero, 2.6% here, and closed entirely by
+ * −0.60.
+ */
+export const STONE_PROUD = 0.16;
+
+/** The extrusion. `depth` is the wall; `slabGeometry` adds the bevel outside it. */
 export const PLATFORM = {
   /** World units the unit outline below is multiplied by. */
   radius: 10.6,
-  /** Top face height. The cultivator stands on it, so it is the scene's zero. */
-  top: 0,
+  /**
+   * Top face height — the flat rock around the stone, so it sits one stone's
+   * thickness below the seat. Everything that stands on the island is seated
+   * from `surfaceAt()` rather than from this directly.
+   */
+  top: SEAT - STONE_PROUD,
   depth: 3.5,
   /** A *small* bevel: a chamfered lip, not a rounded pebble. */
   bevel: { thickness: 0.30, size: 0.46, segments: 2 },
   /** How far a top-face vertex is thrown for chipping, either way. */
   chip: 0.05,
+};
+
+/** The meditation stone, whose top face is the seat itself. */
+export const STONE = {
+  radius: 2.75,
+  depth: 0.78,
+  bevel: { thickness: 0.10, size: 0.14, segments: 1 },
+  chip: 0.04,
 };
 
 /**
@@ -109,8 +148,10 @@ export function platformOutline(radius = PLATFORM.radius) {
  * the peaks are carved under.
  *
  * It fades to zero over the middle of the platform, because the middle is where
- * the cultivator sits and the composition contract puts her feet at exactly
- * y = 0.
+ * the cultivator sits: the seat is `SEAT` exactly, and relief under her would
+ * push rock up through the figure whose feet the whole composition contract is
+ * solved from. Out at the rim it is free to stand higher than the seat, and
+ * does — that is a broken terrace rather than a table.
  */
 export function topRelief(x, z, radius = PLATFORM.radius) {
   const r = Math.hypot(x, z);
@@ -134,17 +175,32 @@ export function topRelief(x, z, radius = PLATFORM.radius) {
 }
 
 /**
+ * How high the rock actually is at a point on the island — the one answer to
+ * "what am I standing on", and the only thing anything up here may seat itself
+ * from.
+ *
+ * It exists because there were four different answers. The platform's own top
+ * came out at `+bevel.thickness` rather than at `PLATFORM.top`, the censer was
+ * seated on bare `topRelief()`, the standing rocks on a hardcoded −0.35, and the
+ * plum on a hand-tuned −0.05 — so three of the four were underground and the
+ * fourth was floating, and every one of them was individually plausible.
+ */
+export function surfaceAt(x, z) {
+  return PLATFORM.top + topRelief(x, z);
+}
+
+/**
  * The meditation stone: the same idea at a tenth the size.
  *
  * It was a nine-sided cylinder sitting on a seven-sided one — two regular
  * polygons stacked concentrically, which is a target, not a rock.
  */
-const STONE = [
+const STONE_PLAN = [
   [14, 1.00], [58, 0.83], [97, 1.10], [141, 0.88], [190, 1.06], [243, 0.79], [299, 0.97],
 ];
 
-export function stoneOutline(radius = 2.75) {
-  return STONE.map(([deg, r]) => {
+export function stoneOutline(radius = STONE.radius) {
+  return STONE_PLAN.map(([deg, r]) => {
     const a = (deg * Math.PI) / 180;
     return [Math.cos(a) * r * radius, Math.sin(a) * r * radius];
   });
@@ -245,15 +301,32 @@ export function symmetryScore(points, samples = 240, minTurn = Math.PI / 12) {
  * stays buried whatever the rim relief is doing under it. The flight starts at
  * bearing 244° because 220°–230° is where the plum is planted, and at u = 0.62
  * because anything left of that is behind the cultivator.
+ *
+ * `proud` is how far the tread stands above **the rock directly under it**, and
+ * that is the only sane way to author it. It used to be an absolute world
+ * height, hand-tuned against a platform that was secretly 0.30 higher than the
+ * code believed (see the translate in `slabGeometry`): every tread came out a
+ * third of a unit low, and re-tuning by eye pushed them lower still, because
+ * what was actually visible was two treads poking through a rim that was
+ * covering the other four. Measured properly, four of the six were *below their
+ * own surface* — a flight of steps buried in the rock it is cut into.
+ *
+ * The values descend, so the path is a stair rather than a shelf. What does not
+ * descend is the *world height*: the rim relief swings ±0.42 under it, so the
+ * flight climbs over the shoulder at 260° before it drops away to the right and
+ * out of the picture, which is what a path over a shoulder does.
  */
 export const STEPS = [
-  { at: [-3.53, 0.50, -7.27], w: 2.60, d: 1.55, h: 1.6, yaw: 1.06, seed: 311 },
-  { at: [-2.87, 0.42, -8.83], w: 2.55, d: 1.50, h: 1.6, yaw: 1.20, seed: 733 },
-  { at: [-1.74, 0.34, -9.84], w: 2.50, d: 1.52, h: 1.6, yaw: 1.34, seed: 197 },
-  { at: [-0.31, 0.26, -8.98], w: 2.45, d: 1.46, h: 1.6, yaw: 1.48, seed: 941 },
-  { at: [0.82, 0.18, -7.83], w: 2.40, d: 1.48, h: 1.6, yaw: 1.62, seed: 419 },
-  { at: [1.72, 0.10, -7.02], w: 2.35, d: 1.42, h: 1.6, yaw: 1.76, seed: 587 },
+  { at: [-3.53, -7.27], proud: 0.29, w: 2.60, d: 1.55, h: 1.6, yaw: 1.06, seed: 311 },
+  { at: [-2.87, -8.83], proud: 0.25, w: 2.55, d: 1.50, h: 1.6, yaw: 1.20, seed: 733 },
+  { at: [-1.74, -9.84], proud: 0.21, w: 2.50, d: 1.52, h: 1.6, yaw: 1.34, seed: 197 },
+  { at: [-0.31, -8.98], proud: 0.17, w: 2.45, d: 1.46, h: 1.6, yaw: 1.48, seed: 941 },
+  { at: [0.82, -7.83], proud: 0.13, w: 2.40, d: 1.48, h: 1.6, yaw: 1.62, seed: 419 },
+  { at: [1.72, -7.02], proud: 0.09, w: 2.35, d: 1.42, h: 1.6, yaw: 1.76, seed: 587 },
 ];
+
+/** A tread's top, in world height. */
+export const stepTop = (s) => surfaceAt(s.at[0], s.at[1]) + s.proud;
 
 /**
  * The anchoring prop: a small incense burner, off the cultivator's right where
@@ -264,8 +337,10 @@ export const STEPS = [
  * trace, and a thin vertical of near-white smoke standing against the one
  * near-black band in the picture. The rocks around it are geology; this is the
  * only thing on the mountain somebody put there.
+ *
+ * `at` is a plan position; it stands on `surfaceAt()`, like everything else.
  */
-export const CENSER = { at: [1.05, 0.0, -2.35], radius: 0.44, height: 0.62, yaw: 0.7 };
+export const CENSER = { at: [1.05, -2.35], radius: 0.44, height: 0.62, yaw: 0.7 };
 
 /** Where the smoke goes: how tall the ribbon is and how far it leans off. */
 export const SMOKE = { height: 2.9, width: 0.22, lean: [-0.55, 0.35], rows: 16 };

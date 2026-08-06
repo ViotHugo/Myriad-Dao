@@ -15,7 +15,7 @@ import { placeAtDepth } from './framing.js';
 import { peakGeometry } from './peaks.js';
 import { PEAK_MESHES, peakPlacements } from './peak-plan.js';
 import { pineGeometry } from './trees.js';
-import { PLUM, plumSkeleton, framingBranch } from './plum-plan.js';
+import { PLUM, plumSeat, plumSkeleton, framingBranch } from './plum-plan.js';
 
 /* ==================================================================== */
 /*  geometry                                                             */
@@ -322,11 +322,13 @@ export function createScenery(env, tier) {
 
   const tree = plumSkeleton({ seed: 77, subs: tier.plumDepth >= 5 ? 3 : 2 });
   const seat = new THREE.Matrix4().compose(
-    new THREE.Vector3(...PLUM.at),
+    new THREE.Vector3(...plumSeat()),
     new THREE.Quaternion().setFromEuler(new THREE.Euler(PLUM.tilt, PLUM.yaw, PLUM.lean, 'YXZ')),
     new THREE.Vector3(PLUM.scale, PLUM.scale, PLUM.scale),
   );
   const frame = framingBranch();
+  // Petals come off the crown, so they fall from where the tree actually is.
+  const PETAL_FROM = plumSeat();
 
   const treeParts = branchInstances(tree.segments, seat);
   const frameParts = branchInstances(frame.segments);
@@ -683,9 +685,9 @@ export function createScenery(env, tier) {
       // on the platform now, so a petal that fell straight down would land on
       // the rock beside the cultivator and sit there; the drift carries them
       // out past the edge, which is where the drop is.
-      petalPos[i * 3 + 0] = PLUM.at[0] + swirl + (s - 0.5) * 4.4 - life * 5.2;
-      petalPos[i * 3 + 1] = PLUM.at[1] + 6.4 - life * 20.0;
-      petalPos[i * 3 + 2] = PLUM.at[2] + Math.cos(life * 7.0 + s * 9.0) * 1.8 + (s - 0.5) * 3.2 - life * 2.6;
+      petalPos[i * 3 + 0] = PETAL_FROM[0] + swirl + (s - 0.5) * 4.4 - life * 5.2;
+      petalPos[i * 3 + 1] = PETAL_FROM[1] + 6.4 - life * 20.0;
+      petalPos[i * 3 + 2] = PETAL_FROM[2] + Math.cos(life * 7.0 + s * 9.0) * 1.8 + (s - 0.5) * 3.2 - life * 2.6;
     }
     petalGeo.attributes.position.needsUpdate = true;
 
