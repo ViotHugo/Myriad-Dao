@@ -913,6 +913,128 @@ Draw calls went 87 → 88 for four new objects, because the platform is welded t
 its skirt and the treads to the censer: two meshes sharing a material are still
 two draw calls.
 
+### Stage 6 — the garment
+
+Everything through stage 5 is landscape. This is the figure standing in it, and
+until this stage she was **one `LatheGeometry` from hem to collar with two tori
+round it** — a cone, which is one of the handful of shapes the eye names
+instantly and then stops looking at. Nothing about it read as cloth, as a robe,
+or as a person facing any particular way.
+
+The plan is `figure-plan.js` and the builders are `garment.js`, split for the
+same reason every other `*-plan` module is: the arithmetic is pure and
+Three-free, so the whole of it — pleat spacing in CSS pixels, cuff margins
+against the body's own outline, sash-tail clearance, the asymmetry score — runs
+in `tests/run.js` without a renderer.
+
+**The seat is measured, and it is the one number in this build that is
+knowingly wrong.** The composition contract puts her feet at y = 0 and calls her
+1.71 units tall. The rock does not agree: `slabGeometry` builds an
+`ExtrudeGeometry` with `bevelEnabled`, and three adds the bevel *outside* the
+extrusion, so a slab's top cap sits a whole `bevelThickness` above the y = 0 its
+own documentation claims. Measured off the built geometry, the platform's top
+face under the figure is at **+0.36** and the meditation stone's at **+0.42** —
+so the bottom quarter of her is inside the rock, and so are the censer, the
+plum's root stubs and the standing rocks, all placed at "y = 0, the top of the
+platform". She reads 10.2% of frame height against a contract that says 13.5%.
+
+Fixing that means lowering the whole foreground island, which moves the platform
+rim, the treads that notch the skyline and every composition number stage 5 was
+gated on — a stage-5 change, with stage-5 evidence, and not something to do
+quietly inside a stage about clothes. So stage 6 composes the garment against
+the surface she *actually sits on*: the hem lands on the stone at y ≈ 0.455 and
+pools over it, and no authored feature — trim band, cuff, sash tail — is placed
+below it where the rock would eat it. The suite asserts that, so the day the
+island is fixed the garment comes up with it.
+
+**裳 — the pleated lower robe.** Twelve pleats, `2 × count` segments alternating
+strictly ridge, valley, ridge, so every facet of the lathe is a plane between
+one of each and the toon ramp steps at the fold. The count is bounded from both
+ends by the camera and not by taste: the hem is 1.10 units across, a world unit
+is 70.6 CSS px at the hero framing, and twelve puts ridge-to-ridge at ~18 px
+across the face of the skirt where twenty would put it at 8 and turn fluting
+into noise. The suite measures the on-screen spacing rather than the count,
+because the count was only ever a proxy for it.
+
+Two things the pleats are *not*: level at the bottom, or free of repetition. The
+hem wanders ±0.062 on three waves whose periods do not divide the segment count
+or each other — a level hem is the bottom of a lampshade, and a wobble that
+comes back into phase with the pleats is one the eye folds back into the
+fluting. The pleats themselves *do* repeat, deliberately, which is the exact
+opposite of the rule the platform outline lives under: cloth folded by a person
+repeats, and that is what makes it read as folded rather than as eroded. Both
+are asserted, in the same section, because the distinction is the point.
+
+**交领右衽 — the crossed collar. This is the element that decides what the shape
+is.** A cone with a light V on its front is a robe; the same cone without it is
+a bell, a chess piece or a lampshade, and at a poly budget where the face is two
+marks it is the *only* thing carrying the read. Three bands: the wearer's left
+panel laps over the right (右衽, closing to her right), and the inner robe shows
+above both in a paler tone. The layering is radial standoff and nothing else —
+left 0.026 over right 0.017 over the inner 0.010 — so the crossing renders in
+the right order from every camera without a `renderOrder` or a `polygonOffset`
+anywhere.
+
+Its width is a frame number in disguise. 0.092 world units is 5.5 CSS px on a
+414-px-wide phone at the hero framing and 15 px at the QA close camera; below
+about five, a light band on dark cloth stops being a shape and becomes an edge
+artefact. The suite measures it at three cameras. The panels are also *wrapped*
+onto `bodyRadius` rather than positioned, so retuning the profile cannot leave
+the collar floating in front of the chest.
+
+The trim also had to be lifted 18% toward white, and the inner robe 50%. That is
+not a re-authoring of eight palettes, it is a contrast decision that belongs to
+the figure: `robe` and `trim` sit at luminance 98 and 133 at realm 0, a step of
+1.36×, and a five-pixel band at 1.36× against the cloth behind it is a smudge.
+
+**广袖 — sleeves, and the arms that were not there.** The old arms were capsules
+at x = ±0.29 with a radius of 0.10, inside a robe whose radius at the same
+height was 0.46: not hidden by sleeves, *inside the body*. The figure had no
+arms in any frame ever shipped. The sleeves are built as a stack of **horizontal
+rings**, which is the one non-obvious decision in the file — cloth hangs under
+gravity whatever the arm inside it is doing, and a tube swept along a slanted
+axis has a slanted mouth, which put the far lip of the cuff thirteen centimetres
+inside the rock. Each cuff falls ~0.19 below its hand and both of them break the
+body's own outline from all four QA cameras, which the suite checks by
+projecting the cuff and the body's silhouette radius into frame space at every
+preset.
+
+**腰带 — the sash.** The two bands stayed; a belt with no ends is a hoop, so it
+gained a knot at the front-left and two tails of different lengths and widths
+falling to mid-skirt. The tails hang *against* the flare of the skirt rather
+than out in the air, because the skirt widens faster than a ribbon falls — a
+tail keeping 8 cm of daylight all the way down would have to fly outward at
+forty degrees, which reads as a streamer in a wind that is not blowing. They
+stand off 0.052 at every sample, the tip kicks out another 0.036, and they are
+their own mesh because they are the one part of the garment with a free end and
+therefore the part stage 8 has to move.
+
+**The pose.** Three degrees of shoulder drop, a head that does not follow the
+shoulders, hands resting one in front of the other, the knot off to one side,
+one sleeve draped forward over the lap and the other fallen to the side.
+`asymmetryScore()` reflects every part through x = 0 and matches it to the
+nearest part of the original set; a mirror-perfect figure scores 0 and reads as
+manufactured, which is the same signal a regular polygon sends. This one scores
+0.08. `shoulderDropDeg()` is *measured* off the arms and held to what `POSE`
+declares, so the pose cannot be documented as three degrees and modelled as
+none.
+
+**The QA profile camera could not see its subject.** Standing rock 4 came out of
+its seeded stream at a world bearing of −40.3°, five units out and a unit and a
+half tall, and the profile preset looks in along −41.8° — so the one instrument
+whose whole job is judging her silhouette from the side had 85% of that
+silhouette behind a rock, in every contact sheet since stage 4.
+`clearOfCameras()` in `framing.js` pushes a bearing out of a 16° wedge in front
+of any camera the build is judged on and leaves it alone otherwise, so exactly
+one rock moved and the other four are where stage 5 left them. It is not only a
+QA fix: the player can nudge the game camera, and a rock a degree and a half off
+her sightline is a rock that swings across her the moment they do.
+
+Draw calls: the figure went from 15 primitives to 10 meshes. Ten parts on four
+materials would be ten calls; the robe, the trim, the inner collar and the tails
+are welded with the same `mergeGeometries` the platform uses, so the whole
+garment is four.
+
 ### Composing in frame space
 
 The camera is authored and fixed, so the frame — not the world — is the thing

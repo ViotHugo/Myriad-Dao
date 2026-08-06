@@ -35,8 +35,13 @@ import {
 } from '../js/view3d/cloud-plan.js';
 import {
   FRAMINGS, REFERENCE_ASPECT, cameraBasis, frameOf, placeAtDepth, unitsPerFrame,
-  horizonV, composition, contactSheetPlan, sunOffsetDeg,
+  horizonV, composition, contactSheetPlan, sunOffsetDeg, clearOfCameras,
 } from '../js/view3d/framing.js';
+import {
+  FIGURE, PLEATS, COLLAR, SASH, ARMS, POSE, SLEEVE_TRIM, bodyRadius, skirtRings,
+  robeRings, pleatSegments, hemOutline, collarPanels, sashTails, cuffs, cuffDrop,
+  figureParts, asymmetryScore, shoulderDropDeg,
+} from '../js/view3d/figure-plan.js';
 import { makeNoise3, ridged3 } from '../js/view3d/noise.js';
 import {
   PEAK_MESHES, SCALE_RANGE, peakPlacements, cloudBands,
@@ -3365,6 +3370,355 @@ section('Stage 5 — the near band is the bottom of the value ladder');
     const src = readFileSync(new URL('../js/view3d/trees.js', import.meta.url), 'utf8');
     return /const PLATES = \[/.test(src) && (src.match(/\{ y: /g) || []).length >= 3
       && /the lit top of the plate/.test(src) && /shaded underside/.test(src);
+  })());
+}
+
+section('Stage 6 — the garment, and the cone it replaces');
+{
+  // A phone, in CSS pixels. Everything in this section that claims to be
+  // legible is measured in these — "0.09 world units" is not a fact about a
+  // picture, and the whole gate for this stage is what survives being 13% of a
+  // 414×896 frame.
+  const W = 414;
+  const H = 896;
+  const pxBetween = (framing, a, b) => {
+    const fa = frameOf(a, { framing });
+    const fb = frameOf(b, { framing });
+    return Math.hypot((fa.u - fb.u) * W, (fa.v - fb.v) * H);
+  };
+  const median = (xs) => xs.slice().sort((a, b) => a - b)[Math.floor(xs.length / 2)];
+  const preset = (id) => CAMERA.debugPresets.find((p) => p.id === id).framing;
+  const avatar = readFileSync(new URL('../js/view3d/avatar.js', import.meta.url), 'utf8');
+
+  check('she is not one lathe with two rings round her any more', (() => (
+    // The old figure: LatheGeometry hem-to-collar, a TorusGeometry collar and a
+    // TorusGeometry sash. The tori stayed — a sash *is* a band — but the body
+    // is built from the plan now, and nothing in here lathes a profile.
+    !/new THREE\.LatheGeometry/.test(avatar)
+    && /figure-plan\.js/.test(avatar) && /garment\.js/.test(avatar)
+    && /pleatedSkirtGeometry/.test(avatar) && /collarPanelGeometry/.test(avatar)
+  ))());
+
+  check('the garment welds down into a handful of draw calls', (() => (
+    // Ten separate primitives on four materials would be ten calls. The robe,
+    // the trim, the inner collar and the tails are four.
+    /mergeGeometries\(robeParts\)/.test(avatar) && /mergeGeometries\(trimParts\)/.test(avatar)
+    && /mergeGeometries\(innerParts\)/.test(avatar)
+  ))());
+
+  /* ------------------------------------------------------------ 裳 pleats */
+
+  check('10–14 pleats, strictly alternating ridge and valley', (() => {
+    const segs = pleatSegments();
+    if (PLEATS.count < 10 || PLEATS.count > 14) return false;
+    if (segs.length !== PLEATS.count * 2) return false;
+    return segs.every((s, i) => s.ridge === (i % 2 === 0))
+      && segs.every((s) => (s.ridge ? s.scale > 0.96 : s.scale < 0.9));
+  })(), `${PLEATS.count} pleats`);
+
+  check('a fold is deep enough to catch light on one side and not the other', (() => {
+    // The whole point of a pleat at this scale is that the ridge and the valley
+    // take different steps off the toon ramp. Eight centimetres at a hem radius
+    // of half a unit is a facet turned ~17° from its neighbour, which is more
+    // than one band of a four-band ramp.
+    const drop = bodyRadius(FIGURE.hem) * (1 - PLEATS.valley);
+    return drop > 0.05 && drop < 0.13;
+  })(), `${(bodyRadius(FIGURE.hem) * (1 - PLEATS.valley)).toFixed(3)} world units`);
+
+  check('the pleats are individually distinguishable at the two near cameras', (() => {
+    // Measured where it counts: ridge to ridge, across the face of the skirt,
+    // for the folds actually turned toward the lens. Near the silhouette every
+    // lathe compresses to nothing, so the edge is not the test.
+    const spacing = (id) => {
+      const framing = preset(id);
+      const eye = cameraBasis(framing).pos;
+      const y = (FIGURE.hem + FIGURE.waist) / 2;
+      const r = bodyRadius(y);
+      const at = (a) => [Math.sin(a) * r, y, Math.cos(a) * r];
+      const segs = pleatSegments();
+      const gaps = [];
+      for (let i = 0; i < segs.length; i += 2) {
+        const p0 = at(segs[i].angle);
+        const n = [Math.sin(segs[i].angle), Math.cos(segs[i].angle)];
+        const to = [eye[0] - p0[0], eye[2] - p0[2]];
+        const len = Math.hypot(to[0], to[1]) || 1;
+        if ((n[0] * to[0] + n[1] * to[1]) / len < 0.55) continue;
+        gaps.push(pxBetween(framing, p0, at(segs[(i + 2) % segs.length].angle)));
+      }
+      return median(gaps);
+    };
+    return spacing('hero') > 12 && spacing('close') > 30;
+  })());
+
+  check('the hem is neither level nor periodic', (() => {
+    // Level is a lampshade. Periodic is worse: a wobble that comes back into
+    // phase with the pleats is a wobble the eye reads as part of the fluting,
+    // and the whole skirt goes back to being a solid of revolution.
+    const ys = hemOutline().map((p) => p[1]);
+    const range = Math.max(...ys) - Math.min(...ys);
+    const distinct = new Set(ys.map((y) => y.toFixed(4))).size;
+    // Every rotation of the sequence, compared with itself. A hem that repeats
+    // every k segments scores ~0 at that lag.
+    const mean = ys.reduce((a, b) => a + b, 0) / ys.length;
+    let closest = Infinity;
+    for (let lag = 1; lag < ys.length; lag++) {
+      let sum = 0;
+      for (let i = 0; i < ys.length; i++) {
+        const d = ys[i] - ys[(i + lag) % ys.length];
+        sum += d * d;
+      }
+      closest = Math.min(closest, Math.sqrt(sum / ys.length) / (Math.max(...ys) - mean));
+    }
+    return range > 0.06 && distinct >= 20 && closest > 0.35;
+  })());
+
+  check('but the pleats themselves do repeat, which is the difference', (() => {
+    // The platform may have no symmetry the eye can find; a pleated skirt must
+    // have one. Cloth folded by a person repeats — that is what makes it read
+    // as folded rather than as eroded.
+    const scale = pleatSegments().map((s) => s.scale);
+    let worst = 0;
+    for (let i = 0; i < scale.length; i++) {
+      worst = Math.max(worst, Math.abs(scale[i] - scale[(i + 2) % scale.length]));
+    }
+    return worst < 0.12;
+  })());
+
+  check('nothing the stage authored is below the rock she sits on', (() => {
+    // The seat is measured, not chosen — see the header of figure-plan.js. A
+    // trim band, a cuff or a tail placed under it is a feature that does not
+    // exist in any shipped frame.
+    const hemLow = Math.min(...hemOutline().map((p) => p[1]));
+    return hemLow > FIGURE.seat - PLEATS.hemWobble - 1e-6
+      && cuffs().every((c) => c.at[1] > FIGURE.seat)
+      && sashTails().every((t) => t.points[t.points.length - 1][1] > FIGURE.seat);
+  })(), `hem ${Math.min(...hemOutline().map((p) => p[1])).toFixed(3)} vs seat ${FIGURE.seat}`);
+
+  check('the trim band at the hem follows the hem, and stands proud of the cloth', (() => {
+    const garment = readFileSync(new URL('../js/view3d/garment.js', import.meta.url), 'utf8');
+    return /hemBandGeometry/.test(garment) && /s\.hem/.test(garment)
+      && PLEATS.trim.lift > 0 && PLEATS.trim.height > 0.05;
+  })());
+
+  check('the robe is graded darker toward the hem in vertex colour', (() => {
+    const garment = readFileSync(new URL('../js/view3d/garment.js', import.meta.url), 'utf8');
+    // Cheap fake AO: every point round a ring has the same normal at the same
+    // height, so no light in the rig can separate the pooled hem from the waist.
+    return /export function gradeToHem/.test(garment) && /applyTint/.test(garment)
+      && /gradeToHem\(/.test(avatar) && /tint: true/.test(avatar);
+  })());
+
+  /* ----------------------------------------------------- 交领右衽 the collar */
+
+  check('there is a crossed collar, and the left panel is over the right', (() => {
+    const panels = collarPanels();
+    const by = Object.fromEntries(panels.map((p) => [p.id, p]));
+    if (!by.left || !by.right || !by.inner) return false;
+    // 右衽. The layering is the radial standoff and nothing else — no
+    // renderOrder, no polygonOffset, so it is right from every camera.
+    return by.left.lift > by.right.lift && by.right.lift > by.inner.lift;
+  })());
+
+  check('both panels cross the centre line, which is what makes it a V', (() => {
+    const mid = (panel) => panel.rows.map(([a, b]) => (a[0] + b[0]) / 2);
+    const panels = collarPanels();
+    const left = mid(panels.find((p) => p.id === 'left'));
+    const right = mid(panels.find((p) => p.id === 'right'));
+    // Left starts on her left and ends past centre on her right; right mirrors
+    // it. Two lines that both stop at x = 0 are a chevron, not a crossing.
+    return left[0] > 0.08 && left[left.length - 1] < -0.08
+      && right[0] < -0.08 && right[right.length - 1] > 0.08;
+  })());
+
+  check('it runs from the neck to below the sternum', (() => {
+    const ys = collarPanels().flatMap((p) => p.rows.flat().map((q) => q[1]));
+    return Math.max(...ys) > FIGURE.collar - 0.02 && Math.min(...ys) < 0.90
+      && Math.min(...ys) > FIGURE.waist;
+  })());
+
+  check('the inner robe shows above the outer collar, in a second tone', (() => {
+    const panels = collarPanels();
+    const inner = panels.find((p) => p.id === 'inner');
+    const outerTop = Math.max(...panels.filter((p) => p.id !== 'inner')
+      .flatMap((p) => p.rows.flat().map((q) => q[1])));
+    return inner.tone === 'inner'
+      && Math.max(...inner.rows.flat().map((q) => q[1])) > outerTop
+      && /innerMat/.test(avatar) && /lerp\(WHITE/.test(avatar);
+  })());
+
+  check('every collar panel lies on the body, not near it', (() => (
+    // Wrapped onto `bodyRadius` by construction, so a retune of the profile
+    // cannot leave the collar floating in front of the chest.
+    collarPanels().every((panel) => panel.rows.flat().every((p) => {
+      const r = Math.hypot(p[0], p[2]);
+      return Math.abs(r - (bodyRadius(p[1]) + panel.lift)) < 0.02;
+    }))
+  ))());
+
+  check('the collar is legible at 100% on a 414×896 phone', (() => {
+    // The gate for this stage, as a number. A light band on dark cloth needs
+    // about five pixels before it stops being a shape and becomes an edge
+    // artefact; the outer panels carry the read and the inner one is an accent
+    // inside it.
+    const width = (id, panelId) => {
+      const framing = preset(id);
+      const panel = collarPanels().find((p) => p.id === panelId);
+      return median(panel.rows.map(([a, b]) => pxBetween(framing, a, b)));
+    };
+    return width('hero', 'right') > 5 && width('hero', 'left') > 5
+      && width('close', 'right') > 12 && width('close', 'left') > 12
+      && width('profile', 'left') > 5 && width('hero', 'inner') > 2.5;
+  })(), `hero ${median(collarPanels().find((p) => p.id === 'left').rows
+    .map(([a, b]) => pxBetween(preset('hero'), a, b))).toFixed(1)} px`);
+
+  /* --------------------------------------------------------- 广袖 sleeves */
+
+  check('the arms are outside the body they hang off', (() => (
+    // They used to be capsules at x = ±0.29 with a radius of 0.10 inside a robe
+    // whose radius at the same height was 0.46 — not hidden by the sleeves,
+    // *inside the body*. The figure had no arms in any shipped frame.
+    ARMS.every((arm) => (
+      Math.hypot(arm.elbow[0], arm.elbow[2]) + arm.upper[1] > bodyRadius(arm.elbow[1])
+    ))
+  ))());
+
+  check('each cuff hangs well below its hand, and clears the seat', (() => (
+    cuffDrop().every((c) => c.drop > 0.15) && cuffs().every((c) => c.at[1] > FIGURE.seat)
+  ))(), cuffDrop().map((c) => `${c.side} ${c.drop.toFixed(2)}`).join(' '));
+
+  check('both cuffs break the body outline from all four QA cameras', (() => {
+    // The gate. The body is a solid of revolution, so its silhouette at a
+    // height is `bodyRadius` whichever way the camera stands; a cuff is only
+    // part of the outline if it projects outside that.
+    const margin = (framing, cuff) => {
+      const y = cuff.at[1];
+      const R = bodyRadius(y);
+      const uAt = (x, z) => frameOf([x, y, z], { framing }).u;
+      let bodyMax = -Infinity;
+      let bodyMin = Infinity;
+      let cuffMax = -Infinity;
+      let cuffMin = Infinity;
+      for (let i = 0; i < 96; i++) {
+        const a = (i / 96) * Math.PI * 2;
+        const u = uAt(Math.sin(a) * R, Math.cos(a) * R);
+        bodyMax = Math.max(bodyMax, u);
+        bodyMin = Math.min(bodyMin, u);
+        const c = uAt(cuff.at[0] + Math.sin(a) * cuff.r, cuff.at[2] + Math.cos(a) * cuff.r);
+        cuffMax = Math.max(cuffMax, c);
+        cuffMin = Math.min(cuffMin, c);
+      }
+      return Math.max(cuffMax - bodyMax, bodyMin - cuffMin) * W;
+    };
+    return CAMERA.debugPresets.every((p) => cuffs().every((c) => margin(p.framing, c) > 0))
+      // …and at the framing the game actually ships, by enough to see.
+      && cuffs().every((c) => margin(preset('hero'), c) > 3);
+  })());
+
+  check('a sleeve is a stack of horizontal rings, so its mouth is level', (() => {
+    const garment = readFileSync(new URL('../js/view3d/garment.js', import.meta.url), 'utf8');
+    // Swept along a slanted axis instead, the mouth comes out slanted, and the
+    // far lip of the cuff went thirteen centimetres into the rock.
+    return /export function drapeGeometry/.test(garment)
+      && ARMS.every((arm) => arm.sleeve.rings.length >= 4)
+      && ARMS.every((arm) => arm.sleeve.rings.every((r, i, all) => i === 0 || r[0] < all[i - 1][0]));
+  })());
+
+  check('each sleeve widens toward its mouth and carries the hem\'s trim', (() => (
+    ARMS.every((arm) => {
+      const rs = arm.sleeve.rings.map((r) => r[3]);
+      return rs.every((r, i) => i === 0 || r > rs[i - 1]);
+    }) && SLEEVE_TRIM.height > 0.04 && SLEEVE_TRIM.lift > 0
+  ))());
+
+  /* ------------------------------------------------------------ 腰带 sash */
+
+  check('the two bands are still there, and they sit on the body', (() => (
+    SASH.bands.length === 2 && SASH.bands.every((b) => b.lift > 0 && b.tube > 0.02)
+    && SASH.bands[0].y < SASH.bands[1].y
+  ))());
+
+  check('there is a knot, and it is off to the front-left', (() => {
+    const [x, y, z] = SASH.knot.at;
+    const bearing = (Math.atan2(x, z) * 180) / Math.PI;
+    return x > 0 && z > 0 && bearing > 20 && bearing < 75
+      && Math.abs(Math.hypot(x, z) - bodyRadius(y)) < 0.12;
+  })());
+
+  check('two tails, both hanging free of the skirt behind them', (() => {
+    // "Free" as a number: every sample stands off the cloth by at least four
+    // centimetres — three pixels at the hero framing, eight at the close QA
+    // camera — and the tip kicks further out again, which is the one place the
+    // eye can see daylight between a ribbon and what it is lying against.
+    const tails = sashTails();
+    if (tails.length !== 2) return false;
+    return tails.every((t) => t.points.every((p) => (
+      Math.hypot(p[0], p[2]) - bodyRadius(p[1]) >= SASH.standoff - 1e-9
+    )));
+  })());
+
+  check('they fall to mid-skirt, and they are not a matched pair', (() => {
+    const tails = sashTails();
+    const mid = (FIGURE.hem + FIGURE.waist) / 2;
+    const tips = tails.map((t) => t.points[t.points.length - 1][1]);
+    const falls = tails.map((t) => t.points[0][1] - t.points[t.points.length - 1][1]);
+    return tips.every((y) => y < mid + 0.06 && y > FIGURE.hem)
+      && falls.every((f) => f > 0.15)
+      && Math.abs(falls[0] - falls[1]) > 0.01
+      && tails[0].width !== tails[1].width;
+  })());
+
+  check('the tails are their own mesh, for the stage that has to move them', (() => (
+    /const tails = new THREE\.Mesh\(/.test(avatar) && /sashTails\(\)/.test(avatar)
+  ))());
+
+  /* ------------------------------------------------------------- the pose */
+
+  check('one shoulder is about three degrees lower than the other', (() => {
+    const measured = shoulderDropDeg();
+    // Measured off the arms rather than declared, and held to what POSE says,
+    // so the pose cannot be documented as three degrees and modelled as none.
+    return Math.abs(measured - POSE.shoulderDropDeg) < 0.3
+      && measured > 2.5 && measured < 4.2;
+  })(), `${shoulderDropDeg().toFixed(2)}°`);
+
+  check('the head does not follow the shoulders', (() => (
+    POSE.headTiltDeg > 1.5 && Math.abs(POSE.headTurnDeg) > 2 && POSE.bodyYaw !== 0
+    && /headGroup\.rotation\.set/.test(avatar)
+  ))());
+
+  check('the figure is not bilaterally symmetric', (() => (
+    // Every part reflected through x = 0 and matched to the nearest part of the
+    // original set. A mirror-perfect figure scores 0, and a figure that scores
+    // 0 is read as manufactured — the same signal a regular polygon sends.
+    asymmetryScore() > 0.04
+  ))(), `score ${asymmetryScore().toFixed(3)} over ${figureParts().length} parts`);
+
+  check('the hands rest asymmetrically, one in front of the other', (() => {
+    const [left, right] = ARMS.map((a) => a.hand);
+    return Math.abs(left.at[1] - right.at[1]) > 0.02
+      && Math.abs(left.at[2] - right.at[2]) > 0.005
+      && Math.abs(Math.abs(left.at[0]) - Math.abs(right.at[0])) > 0.02;
+  })());
+
+  /* -------------------------------------------- the instrument can see her */
+
+  check('no standing rock stands between a QA camera and the figure', (() => {
+    // Replayed from the same seeded stream world.js places them with. Rock 4
+    // came out at a bearing of −40.3° against a profile camera looking in along
+    // −41.8°, and a QA camera that cannot see its subject is not an instrument.
+    const rand = mulberry32(97);
+    const bearings = [];
+    for (let i = 0; i < 5; i++) {
+      const a = rand() * Math.PI * 2;
+      const r = 5.2 + rand() * 3.4;
+      rand(); rand(); rand(); rand(); rand();
+      bearings.push(clearOfCameras(Math.atan2(Math.cos(a) * r, Math.sin(a) * r)));
+    }
+    const wrl = readFileSync(new URL('../js/view3d/world.js', import.meta.url), 'utf8');
+    return /clearOfCameras\(/.test(wrl) && bearings.every((b) => CAMERA.debugPresets.every((p) => {
+      const d = (((b - p.framing.yaw + Math.PI) % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2) - Math.PI;
+      return Math.abs(d) > (15 * Math.PI) / 180;
+    }));
   })());
 }
 

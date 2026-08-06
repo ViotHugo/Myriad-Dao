@@ -10,7 +10,7 @@ framework, no downloaded art. **~1035 KB total**, and installable as a PWA.
 
 ```bash
 npm run serve     # http://localhost:8123
-npm test          # 439 checks
+npm test          # 512 checks
 npm run balance   # assert the A18 pacing table
 npm run sheet     # 4 cameras × 4 skies -> screenshots/contact-sheet.png
 ```
@@ -47,6 +47,18 @@ smoke, an old plum leaning out over the drop — and a second plum branch enteri
 the top-right corner, close to the lens and mostly out of frame, which is the
 oldest trick in Chinese landscape painting and does more for the depth of a
 picture than anything else you can put in it.
+
+Sitting on it, the cultivator — who was a cone until stage 6, because one lathe
+from hem to collar with two rings round it is a cone whatever you call it. She
+wears a twelve-pleat lower robe with a wandering hem, a **crossed collar closing
+to the right**, left panel over right in a paler silk — three quads, and the
+single element that makes a shape read as a Chinese robe rather than a bell —
+wide sleeves whose cuffs hang below her hands and break her outline from every
+camera, and a sash with a knot and two tails. She is deliberately not
+symmetrical: one shoulder three degrees lower, the head tilted the other way,
+one sleeve draped forward and one fallen to her side. All of it is arithmetic in
+`figure-plan.js`, so the test suite can measure the collar in CSS pixels on a
+414×896 phone rather than take anyone's word for it.
 
 The ground under them is real now too: a subdivided plane displaced by
 low-frequency noise, whose far shore rises to a crest that stands in the sea of
@@ -106,13 +118,16 @@ js/view3d/camera-config.js   the locked camera — one object, no scattered lite
 js/view3d/time-of-day.js dawn, day, sunset, night — the sky, the air and the light
 js/view3d/cloud-plan.js  the sea of cloud as arithmetic: its tile, and where it sits
 js/view3d/peak-plan.js   the range as arithmetic: six meshes, and where fourteen stand
+js/view3d/figure-plan.js the cultivator's garment as arithmetic: pleats, collar,
+                         sleeves, sash, and the asymmetry that makes her a person
+js/view3d/garment.js     cloth as geometry — one quad-grid primitive, four ways
 js/view3d/terrain-plan.js the ground as arithmetic: the long section and its far shore
 js/view3d/noise.js       seeded 3D simplex, and the ridged fractal granite is carved from
 js/view3d/debug.js       the QA harness. Dev-only, dynamically imported, never shipped
 tools/contact-sheet.js   drives a headless browser to shoot the 16-frame sheet
 tools/balance-sim.js     plays the engine headlessly, checks pacing
 tools/make-icons.js      regenerates the PWA icons
-tests/run.js             439 checks
+tests/run.js             512 checks
 docs/DESIGN.md           art direction, performance budget, quality tiers, balance
 ```
 

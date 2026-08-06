@@ -147,6 +147,35 @@ export function sunOffsetDeg(dir, framing = FRAMINGS.world) {
   return (d * 180) / Math.PI;
 }
 
+/**
+ * Push a bearing out of the wedge in front of any camera the build is judged
+ * on, and leave it alone if it was never in one.
+ *
+ * Set dressing is negative space: a standing rock exists so that the things
+ * around it have somewhere to be, and it does not care which compass point it
+ * stands at. The figure does care. Rock 4 of stage 4's five came out of its
+ * seeded stream at a world bearing of −40.3°, five units out and a unit and a
+ * half tall, and the QA profile camera looks in along −41.8° — so the one
+ * instrument whose whole job is to judge her silhouette from the side had
+ * eighty-five percent of that silhouette behind a rock, in every contact sheet
+ * since. It is not only a QA fault either: the player can nudge the game
+ * camera, and a rock a degree and a half off her sightline is a rock that
+ * swings across her the moment they do.
+ *
+ * The half-angle is the width of what is being protected plus the width of
+ * what would block it — the figure subtends about 2.7° from fifteen units and
+ * a standing rock about 5.4° from ten, so anything inside ~8° can overlap her.
+ * Sixteen is that with room to spare.
+ */
+export function clearOfCameras(bearing, half = (16 * Math.PI) / 180) {
+  for (const preset of CAMERA.debugPresets) {
+    const { yaw } = preset.framing;
+    const d = (((bearing - yaw + Math.PI) % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2) - Math.PI;
+    if (Math.abs(d) < half) return yaw + (d < 0 ? -half : half);
+  }
+  return bearing;
+}
+
 /** How much of the frame's height a vertical world segment covers. */
 export function spanV(from, to, opts = {}) {
   const a = frameOf(from, opts);
