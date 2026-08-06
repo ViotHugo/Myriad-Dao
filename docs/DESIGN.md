@@ -976,25 +976,29 @@ Three-free, so the whole of it — pleat spacing in CSS pixels, cuff margins
 against the body's own outline, sash-tail clearance, the asymmetry score — runs
 in `tests/run.js` without a renderer.
 
-**The seat is measured, and it is the one number in this build that is
-knowingly wrong.** The composition contract puts her feet at y = 0 and calls her
-1.71 units tall. The rock does not agree: `slabGeometry` builds an
-`ExtrudeGeometry` with `bevelEnabled`, and three adds the bevel *outside* the
-extrusion, so a slab's top cap sits a whole `bevelThickness` above the y = 0 its
-own documentation claims. Measured off the built geometry, the platform's top
-face under the figure is at **+0.36** and the meditation stone's at **+0.42** —
-so the bottom quarter of her is inside the rock, and so are the censer, the
-plum's root stubs and the standing rocks, all placed at "y = 0, the top of the
-platform". She reads 10.2% of frame height against a contract that says 13.5%.
+**The seat was measured, and then the island moved under it.** When this stage
+was written the rock did not top out where it claimed to: `slabGeometry` builds
+an `ExtrudeGeometry` with `bevelEnabled`, three adds the bevel *outside* the
+extrusion, and the meditation stone's top face came back at **+0.42** against a
+composition contract that puts her feet at y = 0. The bottom quarter of her was
+inside the rock and she read 10.2% of frame height against a contract that says
+13.5%. Lowering the island moves the platform rim, the treads that notch the
+skyline and every composition number stage 5 was gated on, so stage 6 did the
+only other thing available and composed the garment against the surface she
+*actually sat on*: the hem landed on the stone at y ≈ 0.455 and pooled over it,
+and no authored feature — trim band, cuff, sash tail — was placed below it where
+the rock would eat it.
 
-Fixing that means lowering the whole foreground island, which moves the platform
-rim, the treads that notch the skyline and every composition number stage 5 was
-gated on — a stage-5 change, with stage-5 evidence, and not something to do
-quietly inside a stage about clothes. So stage 6 composes the garment against
-the surface she *actually sits on*: the hem lands on the stone at y ≈ 0.455 and
-pools over it, and no authored feature — trim band, cuff, sash tail — is placed
-below it where the rock would eat it. The suite asserts that, so the day the
-island is fixed the garment comes up with it.
+Stage 5 has since lowered the island, and the garment came up with it, which is
+what asserting against `FIGURE.seat` rather than against 0.455 bought. `SEAT` is
+now `platform-plan.js`'s own export rather than a number typed twice, so the two
+files cannot disagree again. Only the skirt changed: the anchors from the waist
+up were authored against the contract's y and the contract did not move, while
+the hem dropped 0.455 → 0.035. Two things hang off that and both had to follow
+it down — the body profile gained four rings below the old hem so it keeps
+flaring over the 42 cm the rock used to eat instead of stopping dead in a
+cylinder, and the sash tails were re-dropped to the *new* mid-skirt, which is
+(hem + waist) / 2 and moved 21 cm with it. She reads the contract's 13.5% now.
 
 **裳 — the pleated lower robe.** Twelve pleats, `2 × count` segments alternating
 strictly ridge, valley, ridge, so every facet of the lathe is a plane between
@@ -1633,19 +1637,9 @@ just quietly stops working — so they are the ones worth spending assertions on
   following the terrain.
 - The `close` framing used by the Arts tab is a tighter version of the world
   shot; it does not yet show the meridian constellation as its own composition.
-- **The foreground island sits 0.36 too high, and the figure is inside it.**
-  `slabGeometry` builds an `ExtrudeGeometry` with `bevelEnabled`, and three adds
-  the bevel *outside* the extrusion — so a slab's top cap is a whole
-  `bevelThickness` above the y = 0 its own documentation claims. Measured off
-  the built geometry: the platform's top face under the cultivator is at +0.36
-  and the meditation stone's at +0.42, against a composition contract that puts
-  her feet at 0. Everything placed at "y = 0, the top of the platform" is
-  sunk by the same amount — the censer is half buried, the plum's four root
-  stubs are invisible, and the cultivator reads 10.2% of frame height where the
-  contract says 13.5%. Stage 6 worked around it by composing the garment against
-  the surface she actually sits on (`SEAT` in `figure-plan.js`) and asserting
-  that nothing is authored below it. The fix is to lower the whole island by
-  0.36 and re-seat the props with it, which moves the platform rim, the treads
-  that notch the skyline and the plum's roots — a stage-5 change, needing
-  stage-5 contact-sheet evidence, and not one to make quietly inside a stage
-  about clothes.
+
+Closed since: **the foreground island sat 0.36 too high and the figure was
+inside it**, because `ExtrudeGeometry` adds its bevel outside `depth`. Stage 5
+seated the island on `surfaceAt()` and the garment followed it down — see the
+stage 5 and stage 6 sections above. Nothing on the island is authored above the
+seat any more and the suite holds it there.

@@ -30,29 +30,38 @@
 // ---------------------------------------------------------------------------
 // The island was seated and this file follows it
 //
-// `SEAT` is the single most load-bearing number here and it is *measured*, not
-// chosen. The composition contract puts her feet at y = 0 and calls her 1.71
-// tall — but the rock under her does not top out at zero. `slabGeometry` builds
-// an `ExtrudeGeometry` with `bevelEnabled`, and three adds the bevel *outside*
-// the extrusion, so a slab's top cap sits a full `bevelThickness` above the
-// y = 0 its own documentation claims. Measured off the built geometry:
+// `SEAT` is the single most load-bearing number here, and it is now *imported*
+// rather than typed. When this file was written the rock did not top out where
+// it said it did: `slabGeometry` builds an `ExtrudeGeometry` with
+// `bevelEnabled`, three adds the bevel *outside* the extrusion, and the
+// meditation stone's top face came back at y = +0.42 against a composition
+// contract that puts her feet at 0. So stage 6 composed the garment against the
+// surface she actually sat on — hem at 0.455, pooling over a stone 42 cm in the
+// air — and said so, because the alternative was lowering the whole foreground
+// island and that is not a change to make quietly inside a stage about clothes.
 //
-//   the platform's top face under the figure    y = +0.36
-//   the meditation stone's top face             y = +0.42
+// Stage 5 lowered the island. `platform-plan.js` exports `SEAT = 0`, the
+// stone's top face *is* that seat, and `surfaceAt()` is the one answer to what
+// anything on the island is standing on. This file follows it: `SEAT` is that
+// export, so the two cannot drift again, and the garment is re-composed against
+// y = 0.
 //
-// So the bottom quarter of her is inside the rock — as are the censer, the
-// plum's root stubs and the standing rocks, all placed at "y = 0, the top of
-// the platform". That is a stage-5 defect and fixing it means lowering the
-// whole foreground island, which moves the platform rim, the treads that notch
-// the skyline and every composition number stage 5 was gated on. It is not a
-// change to make quietly inside a stage about clothes.
+// What that costs is all in the skirt, because the anchors above the waist were
+// never wrong — they were authored against the contract's y and the contract
+// did not move. Only the hem did, from 0.455 down to 0.035, and everything that
+// hangs against the skirt came with it:
 //
-// What this stage does instead is **compose the garment against the surface she
-// actually sits on**: the hem lands on the stone at y ≈ 0.455 and pools, and no
-// authored feature — trim band, pleat, cuff, tail — is placed below it where
-// the rock would eat it. She reads 10.2% of frame height rather than the
-// contract's 13.5% until the island is fixed, and that is the one number in
-// this build that is knowingly wrong.
+//   `RINGS`      four rings below 0.455, so the profile keeps flaring over the
+//                42 cm of skirt the rock used to eat instead of stopping dead
+//                in a cylinder at the old hem
+//   `SASH.tails` re-dropped to the *new* mid-skirt. Mid-skirt is
+//                (hem + waist) / 2 and it moved 21 cm down with the hem, so
+//                tails that used to reach it now stop at the top third
+//
+// Nothing authored — trim band, pleat, cuff, tail — sits below the seat, and
+// the suite asserts it against `FIGURE.seat` rather than against a number, so
+// the assertion survives the island moving again. She reads the contract's
+// 13.5% of frame height now, not 10.2%.
 
 import { mulberry32 } from '../rng.js';
 import { SEAT as ROCK_SEAT } from './platform-plan.js';
@@ -62,6 +71,11 @@ import { SEAT as ROCK_SEAT } from './platform-plan.js';
 /**
  * Where she sits, and the heights everything else is hung off. World units,
  * with the avatar group at the origin, so these are also world y.
+ *
+ * Re-exported from the island rather than typed here. The stone's top face is
+ * the seat and the platform hangs below it, so this is the one number the
+ * garment and the rock have to agree on — and agreeing by import is the only
+ * form of agreement that cannot go stale.
  */
 export const SEAT = ROCK_SEAT;
 
@@ -89,11 +103,20 @@ export const FIGURE = {
  *
  * It is also what the collar panels and the sash tails are wrapped onto, so a
  * panel is on the body by construction rather than by a radius typed twice.
+ *
+ * The table has to span the *whole* garment. `bodyRadius` clamps past either
+ * end, so a ring dropped off the top does not fail loudly — it silently returns
+ * the last radius for everything above it, which turns the upper robe into a
+ * 0.47 cylinder, buries the arms inside the body they hang off, and leaves
+ * `robeRings()` filtering an empty tail. Hem to collar, all of it.
  */
 const RINGS = [
   [0.035, 0.648], [0.130, 0.622], [0.240, 0.596], [0.350, 0.575],
   [0.455, 0.556], [0.520, 0.545], [0.610, 0.516], [0.700, 0.472],
+  [0.782, 0.428], [0.860, 0.404], [0.950, 0.372], [1.040, 0.325],
+  [1.110, 0.274], [1.160, 0.194], [1.215, 0.105],
 ];
+
 /** The mean radius of the garment at a height. Clamped past either end. */
 export function bodyRadius(y) {
   if (y <= RINGS[0][0]) return RINGS[0][1];
@@ -448,10 +471,23 @@ export const SASH = {
    * standoff, so a tail cannot end up inside the cloth however the profile is
    * retuned. Different lengths and different widths — this is a knot, not a
    * pair of ribbons on a maypole.
+   *
+   * The *y* is not retune-proof the way the radius is, and it is the one thing
+   * here that has to be re-authored when the hem moves. A tail falls to
+   * mid-skirt, mid-skirt is (hem + waist) / 2, and when the island was seated
+   * and the hem dropped to 0.035 that midpoint went with it — the old four-point
+   * fall stopped at 0.59, which against the longer skirt is the top third. Five
+   * points now, and they reach it.
    */
   tails: [
-    { width: 0.082, bearings: [[0.985, 0.792], [1.022, 0.706], [1.052, 0.636], [1.108, 0.590]] },
-    { width: 0.062, bearings: [[0.872, 0.788], [0.890, 0.700], [0.882, 0.628], [0.846, 0.566]] },
+    {
+      width: 0.082,
+      bearings: [[0.985, 0.792], [1.022, 0.706], [1.052, 0.622], [1.086, 0.522], [1.118, 0.420]],
+    },
+    {
+      width: 0.062,
+      bearings: [[0.872, 0.788], [0.890, 0.700], [0.882, 0.612], [0.868, 0.500], [0.846, 0.388]],
+    },
   ],
 };
 
@@ -644,9 +680,10 @@ export const FACE = {
  * with the figure's own outline reaching u 0.33 — a clear gap of nineteen CSS
  * pixels, so the two never merge into one shape — and its head sits at v 0.50,
  * just under the horizon at 0.45 and just under her crown at 0.475, so it reads
- * against the bright cloud and does not compete with her. The tip is at y 0.30,
- * twelve centimetres inside a stone whose top face is at 0.42: it is *in* the
- * rock, not standing on it.
+ * against the bright cloud and does not compete with her. The tip is twelve
+ * centimetres below the stone's top face — it is *in* the rock, not standing on
+ * it — and it stays twelve centimetres in now the island has been seated,
+ * because the whole sword came down with the seat.
  *
  * Everything below is a fraction along the axis from tip to head, so the whole
  * sword can be moved or re-scaled by moving the two ends.
