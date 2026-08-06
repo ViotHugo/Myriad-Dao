@@ -5,15 +5,20 @@
 
 import * as THREE from 'three';
 import { mulberry32 } from '../rng.js';
-import { placeAtDepth } from './framing.js';
-import { stoneGeometry } from './rock.js';
-import { AURORA_COLOR } from './palette.js';
+import { cameraBasis, placeAtDepth } from './framing.js';
+import { stoneGeometry, slabGeometry, skirtGeometry, mergeGeometries } from './rock.js';
+import { AURORA_COLOR, foregroundInk } from './palette.js';
 import { sunDirection } from './time-of-day.js';
 import { createCloudSea } from './cloud-sea.js';
 import { TERRAIN, TARN, terrainField, terrainHeight } from './terrain-plan.js';
 import {
+  PLATFORM, platformOutline, stoneOutline, topRelief, STEPS, CENSER, SMOKE,
+} from './platform-plan.js';
+import { stepsGeometry, censerGeometry, smokeGeometry } from './props.js';
+import { pineGeometry } from './trees.js';
+import {
   makeSkyMaterial, makeRidgeMaterial, makeInkMaterial, makeWaterMaterial,
-  makeMistMaterial, makeGraniteMaterial,
+  makeMistMaterial, makeGraniteMaterial, makeSmokeMaterial,
 } from './shaders.js';
 
 /* ------------------------------------------------------------ CPU noise */
@@ -210,30 +215,129 @@ export function createWorld(env, tier, lighting) {
   // per-object uniform the renderer sets, so the far midground below shares
   // these same materials and pays nothing for a lookup that could only ever
   // come back "lit".
-  // rim 0.25 → 0.08. Two reasons, and both are about a plane rather than about
-  // this colour. A fresnel edge on the one surface in the frame that is never
-  // seen edge-on is not an edge, it is a veil over the whole foreground — and
-  // `uRimColor` is the palette's accent, which is the one colour the rules say
-  // may not sit on a background element. It is still not zero: a trace of sky
-  // along the far lip is what keeps the shelf from ending on a cut.
-  const groundMat = makeInkMaterial(env, { color: '#2b3038', rim: 0.08, bands: 3 });
-  const shelf = new THREE.Mesh(new THREE.CylinderGeometry(9.5, 12.5, 3.2, 7, 1), groundMat);
-  shelf.position.y = -1.6;
+  // rim 0.25 → 0.08 → 0.02, in three stages, and the third one is the one that
+  // finally killed it. A fresnel edge on the one surface in the frame that is
+  // never seen edge-on is not an edge, it is a veil over the whole foreground —
+  // and `uRimColor` is the palette's accent, which is the one colour the rules
+  // say may not sit on a background element.
+  //
+  // 0.08 looked like a trace and was not, because the rim term is **additive**
+  // and the albedo underneath it is not. Once this stage took the platform to
+  // near-black, the rim was no longer a few percent of the surface's light —
+  // it was almost all of it: `pow(1 - dot(n, v), 4)` runs at 0.55 across a top
+  // seen from eight degrees above, and the grayscale sheet put the platform at
+  // 82 against a midground of 67. The nearest rock in the picture was lighter
+  // than the range behind it, which is the exact inversion the whole value
+  // ladder exists to prevent, and it was arriving through a term that had
+  // nothing to do with the palette at all.
+  //
+  // Flat shaded, too. The top is nine large triangles between the outline
+  // points, each tipped a different way by the rim relief; smooth-shaded they
+  // average into one even grey and the relief does nothing. Faceted, each takes
+  // its own step off the three-band ramp, which is what makes a broken rock
+  // terrace out of a slab.
+  //
+  // ---------------------------------------------------------------------
+  // Stage 5: it is not a cylinder any more, and it is the darkest thing in
+  // the frame
+  //
+  // Two faults, and they compounded. The shelf was
+  // `CylinderGeometry(9.5, 12.5, 3.2, 7)` standing on a seven-sided apron — the
+  // two largest objects in the picture, both regular polygons, concentric. A
+  // regular polygon is the one silhouette the eye solves instantly, and it
+  // solves it *in grayscale*, which is the instrument this build judges itself
+  // with. And it was painted with the realm's `ground`, a mid tone: the nearest
+  // rock in the frame came out lighter than ranges a hundred units behind it,
+  // which is the value ladder running backwards through the foreground.
+  //
+  // So: a hand-authored eleven-point plan extruded with a small bevel
+  // (platform-plan.js holds the drawing and the reason for every number),
+  // chipped on top, and cut from `foregroundInk` — the realm's ink taken most
+  // of the way to black, so the near band is the anchor the rest of the ladder
+  // is read against rather than a pale slab in the middle of it.
+  const groundMat = makeInkMaterial(env, { color: '#181c22', rim: 0.02, bands: 3, flat: true, tint: true });
+  //
+  // The slab and the mass under it are welded into one buffer. They share a
+  // material and neither ever moves, so two meshes was two draw calls for one
+  // object; the skirt is lofted from the platform's own outline, so the two
+  // could not disagree about the silhouette even if somebody wanted them to.
+  const outline = platformOutline();
+  const shelf = new THREE.Mesh(mergeGeometries([
+    slabGeometry({
+      outline,
+      depth: PLATFORM.depth,
+      bevel: PLATFORM.bevel,
+      relief: topRelief,
+      chip: PLATFORM.chip,
+      seed: 5,
+      tint: { top: 1.15, bottom: 0.52, from: 0, to: -PLATFORM.depth },
+    }),
+    skirtGeometry({
+      outline, from: -PLATFORM.depth + 0.4, to: -17.5, flare: [1.02, 2.4], rings: 5, seed: 88,
+    }),
+  ]), groundMat);
+  shelf.position.y = PLATFORM.top;
   shelf.receiveShadow = true;
   group.add(shelf);
 
-  const apron = new THREE.Mesh(new THREE.CylinderGeometry(13, 26, 14, 7, 1, true), groundMat);
-  apron.position.y = -9.6;
-  apron.receiveShadow = true;
-  group.add(apron);
-
-  // A meditation stone, slightly proud of the shelf.
-  const stoneMat = makeInkMaterial(env, { color: '#39404a', rim: 0.4, bands: 3, flat: true });
-  const stone = new THREE.Mesh(new THREE.CylinderGeometry(2.4, 2.8, 0.5, 9, 1), stoneMat);
-  stone.position.y = 0.15;
+  // A meditation stone, slightly proud of the shelf — a seven-point plan rather
+  // than the nine-sided cylinder that used to sit concentrically inside the
+  // seven-sided one.
+  const stoneMat = makeInkMaterial(env, { color: '#242a33', rim: 0.10, bands: 3, flat: true, tint: true });
+  const stone = new THREE.Mesh(slabGeometry({
+    outline: stoneOutline(),
+    depth: 0.78,
+    bevel: { thickness: 0.10, size: 0.14, segments: 1 },
+    chip: 0.04,
+    seed: 61,
+    tint: { top: 1.2, bottom: 0.66, from: 0, to: -0.78 },
+  }), stoneMat);
+  stone.position.y = 0.32;
   stone.castShadow = true;
   stone.receiveShadow = true;
   group.add(stone);
+
+  /* worn steps, and the world past the crop ---------------------------- */
+  //
+  // The one cue in the picture that says the mountain does not stop at the edge
+  // of the frame. They cross the back of the platform and leave by the side,
+  // descending — which is not where they were first put. A flight running *off*
+  // the back edge and down is completely invisible from this camera: the eye is
+  // two units above a rim at y = 0, so the platform's own mass occludes every
+  // point beyond its edge that lies below it. Measured, not guessed; see the
+  // header of platform-plan.js.
+  //
+  // The treads and the censer go into one buffer for the same reason the
+  // platform and its skirt do: same material, nothing moves, and the two of
+  // them together are one draw call instead of two.
+  const censerAt = [CENSER.at[0], topRelief(CENSER.at[0], CENSER.at[2]), CENSER.at[2]];
+  const censerGeo = censerGeometry({ radius: CENSER.radius, height: CENSER.height });
+  censerGeo.rotateY(CENSER.yaw);
+  censerGeo.translate(censerAt[0], censerAt[1], censerAt[2]);
+  censerGeo.computeVertexNormals();
+  const dressing = new THREE.Mesh(
+    mergeGeometries([stepsGeometry(STEPS), censerGeo]), stoneMat,
+  );
+  dressing.castShadow = true;
+  dressing.receiveShadow = true;
+  group.add(dressing);
+
+  /* the thread of smoke off the burner --------------------------------- */
+  //
+  // The ribbon is a flat strip, so it is turned to face the lens — at this
+  // camera's own bearing, worked out from the framing rather than typed in, so
+  // it keeps facing the right way if the camera is ever re-solved.
+  const smokeMat = makeSmokeMaterial(env, { lean: SMOKE.lean });
+  const smoke = new THREE.Mesh(
+    smokeGeometry({ height: SMOKE.height, width: SMOKE.width, rows: SMOKE.rows }), smokeMat,
+  );
+  {
+    const eye = cameraBasis().pos;
+    smoke.position.set(censerAt[0], censerAt[1] + CENSER.height * 1.15, censerAt[2]);
+    smoke.rotation.y = Math.atan2(eye[0] - censerAt[0], eye[2] - censerAt[2]);
+    smoke.renderOrder = 2;
+  }
+  group.add(smoke);
 
   // A few standing rocks, for the negative space to push against. One draw
   // call: five separate meshes here cost as much as the whole karst range.
@@ -271,22 +375,26 @@ export function createWorld(env, tier, lighting) {
   // rock to a mid grey — so the *nearest* thing in the midground came out
   // paler than the ranges twenty times further away, and the depth order of
   // the whole picture read backwards.
-  const trunkMat = makeInkMaterial(env, { color: '#141922', rim: 0.16, bands: 2, fogCap: 0.22 });
   const needleMat = makeInkMaterial(env, { color: '#18232a', rim: 0.20, bands: 2, flat: true, fogCap: 0.22 });
 
-  // Pines as two instanced draws rather than six meshes per tree: at two trees
-  // that was twelve draw calls for scenery the player barely registers. Only
-  // x, z and a scale here — the ground below decides the height, further down.
+  // One instanced draw for the whole stand, stem and canopy together.
+  //
+  // It was two — a cylinder for the trunk and five `ConeGeometry` skirts — and
+  // the cones were the problem rather than the draw call. A stack of cones is a
+  // fir; a fir is the silhouette of a Christmas card; and these two trees are
+  // the *only* man-height objects in the midground, which makes them the scale
+  // cue for the entire landform. The eye sizes the mountain behind whatever it
+  // decides these are. Layered horizontal plates with sky between them is what
+  // a Chinese pine is, and it is why the stand now reads as Mount Hua rather
+  // than as Bavaria. See trees.js.
+  //
+  // Only x, z and a scale here — the ground below decides the height.
   const PINES = [
     [-96, 0, -112, 0.95],
     [-70, 0, -104, 0.78],
   ];
-  const TIERS_PER_PINE = 5;
   const pineTrunks = new THREE.InstancedMesh(
-    new THREE.CylinderGeometry(0.08, 0.22, 4.6, 5), trunkMat, PINES.length,
-  );
-  const pineNeedles = new THREE.InstancedMesh(
-    new THREE.ConeGeometry(1, 0.85, 6, 1), needleMat, PINES.length * TIERS_PER_PINE,
+    pineGeometry({ seed: 17, tiers: 4 }), needleMat, PINES.length,
   );
 
   // The midground. Two pines on the near slope of the far shore, which is the
@@ -301,7 +409,7 @@ export function createWorld(env, tier, lighting) {
   // saved, and the spur that was a separate rock is part of the landform it was
   // pretending to be.
   const midground = new THREE.Group();
-  midground.add(pineTrunks, pineNeedles);
+  midground.add(pineTrunks);
   const pine = pineTrunks;
   group.add(midground);
 
@@ -357,23 +465,17 @@ export function createWorld(env, tier, lighting) {
     const v = new THREE.Vector3();
     const sc = new THREE.Vector3();
     const prand = mulberry32(6421);
+    // The mesh occupies y 0..1.05 at unit scale, so the height it is asked for
+    // is the height it comes out.
     PINES.forEach(([px, , pz, ps], p) => {
       const py = terrainHeight(px, pz, field);
-      const yaw = prand() * Math.PI * 2;
-      v.set(px, py + 2.3 * ps, pz);
-      q.setFromEuler(new THREE.Euler(0, yaw, 0.16, 'YXZ'));
-      sc.set(ps, ps, ps);
+      const h = 5.4 * ps;
+      v.set(px, py, pz);
+      q.setFromEuler(new THREE.Euler(0, prand() * Math.PI * 2, 0.05, 'YXZ'));
+      sc.set(h * 0.72, h, h * 0.72);
       pineTrunks.setMatrixAt(p, m.compose(v, q, sc));
-      for (let i = 0; i < TIERS_PER_PINE; i++) {
-        const rad = (1.35 - i * 0.24) * ps;
-        v.set(px + (-0.10 - i * 0.09) * ps, py + (1.9 + i * 0.62) * ps, pz);
-        q.setFromEuler(new THREE.Euler(0, yaw, -0.06, 'YXZ'));
-        sc.set(rad, ps, rad * 0.6);
-        pineNeedles.setMatrixAt(p * TIERS_PER_PINE + i, m.compose(v, q, sc));
-      }
     });
     pineTrunks.instanceMatrix.needsUpdate = true;
-    pineNeedles.instanceMatrix.needsUpdate = true;
   }
 
   /* water ------------------------------------------------------------- */
@@ -484,6 +586,12 @@ export function createWorld(env, tier, lighting) {
     zenith: new THREE.Color(), horizon: new THREE.Color(), below: new THREE.Color(),
     ambient: new THREE.Color(), ground: new THREE.Color(), inkRim: new THREE.Color(),
     waterTop: new THREE.Color(), waterTint: new THREE.Color(),
+    // The near band. Two rungs, both cut from the realm's ink: the island
+    // itself, and the loose rock standing on it — which is a shade lighter so
+    // that five rocks and a censer do not disappear into the platform they are
+    // sitting on. Neither is the realm's `ground`, which is a mid tone meant
+    // for the far shore.
+    fore: new THREE.Color(), foreStone: new THREE.Color(),
     // The realm's two cloud values, eased here like everything else. The sea
     // reads them from `cur`, never from the palette directly, so a realm change
     // fades the cloud instead of cutting it.
@@ -522,6 +630,8 @@ export function createWorld(env, tier, lighting) {
     to(cur.waterTint, p.water);
     to(cur.cloud, p.cloud);
     to(cur.cloudCrest, p.cloudCrest);
+    to(cur.fore, foregroundInk(p.ink));
+    to(cur.foreStone, foregroundInk(p.ink, 0.32));
     // Water holds the sky: bright toward the far bank where it carries the
     // skyline, darker in the near water where it carries the upper sky. Both
     // are the sky's own colours, or the river reads as a differently-coloured
@@ -574,7 +684,14 @@ export function createWorld(env, tier, lighting) {
     // rock from another.
     cloudSea.apply(cur.cloud, cur.cloudCrest);
 
-    groundMat.uniforms.uColor.value.copy(cur.ground);
+    // The foreground band. Not `cur.ground` — that is the far shore's colour,
+    // and painting the nearest rock in the frame with it is what put the
+    // foreground *lighter* than the midground for four stages.
+    groundMat.uniforms.uColor.value.copy(cur.fore);
+    stoneMat.uniforms.uColor.value.copy(cur.foreStone);
+    // The smoke is the one pale thing in the near band, so it takes the
+    // brightest rung there is — the cloud's own crest.
+    smokeMat.uniforms.uColor.value.copy(cur.cloudCrest);
     // The ground takes the realm's *nearest* ridge colour, and `ridges` is the
     // right ramp for it rather than a coincidence: those colours are authored
     // for valley walls seen through mist, which is exactly what this landform
@@ -602,6 +719,10 @@ export function createWorld(env, tier, lighting) {
   }
 
   function update(dt, t, reduced = false) {
+    // Reduced motion damps the smoke rather than freezing it: a thread of
+    // incense that has stopped moving reads as a scratch on the glass.
+    smokeMat.uniforms.uWind.value = reduced ? 0.3 : 1;
+
     // Mist bands drift laterally and turn back at the limit their own width
     // allows — see the band builder above for why that limit is not a constant.
     // Turning rather than wrapping, too: a wrap teleports the whole band, and
@@ -621,6 +742,6 @@ export function createWorld(env, tier, lighting) {
     applyPalette, setStorm, update,
     /** The resolved day: what the exposure and bloom dials should be showing. */
     atmosphere: cur,
-    materials: { groundMat, stoneMat, trunkMat, needleMat, terrainMat },
+    materials: { groundMat, stoneMat, needleMat, terrainMat, smokeMat },
   };
 }

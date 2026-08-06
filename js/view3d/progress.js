@@ -19,9 +19,16 @@ export function sceneryProgress(vm, tier) {
     // The sea of cloud sinks as you climb: early it is above you and hides the
     // range, by the last realms you look down on all of it.
     cloudDrop: realmT * 15,
-    // The plum keeps time with the stage — bare in Early, budding in Mid, full
-    // in Late, shedding at Peak, when the qi is about to break anyway.
-    blossom: [0.06, 0.38, 1.0, 0.72][vm.stage] ?? 0.5,
+    // The plum keeps time with the stage — in bud at Early, opening at Mid,
+    // full in Late, shedding at Peak, when the qi is about to break anyway.
+    //
+    // The floor is 0.34, not 0.06. At 0.06 the opening realm showed nine
+    // flowers on a thirty-seven-segment tree, which is not "a plum in bud" —
+    // it is a **bare deciduous tree**, the exact silhouette stage 5 exists to
+    // get out of this landscape, shipped in every first screenshot of the game.
+    // A progression cue may run from a little to a lot; it may not run from
+    // "wrong subject" to "right subject".
+    blossom: [0.34, 0.60, 1.0, 0.76][vm.stage] ?? 0.6,
     petalRate: [0.05, 0.22, 0.45, 1.0][vm.stage] ?? 0.3,
     // The jianghu notices you: cranes gather as renown climbs.
     cranes: Math.min(tier.cranes, Math.round((vm.jianghu.renown / 99) * tier.cranes) + (vm.realm >= 2 ? 1 : 0)),

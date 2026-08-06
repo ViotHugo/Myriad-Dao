@@ -40,6 +40,14 @@ crosses the range, and a waterfall widens with your sect's mine. The landscape i
 a readout — how many peaks stand clear of the cloud is your realm, and you can
 read it without looking at a single number.
 
+In front of all of it, a near-black band you read everything else against: an
+irregular slab of rock hand-drawn from eleven points, worn steps going down over
+its shoulder and out of the picture, a small incense burner with a thread of
+smoke, an old plum leaning out over the drop — and a second plum branch entering
+the top-right corner, close to the lens and mostly out of frame, which is the
+oldest trick in Chinese landscape painting and does more for the depth of a
+picture than anything else you can put in it.
+
 The ground under them is real now too: a subdivided plane displaced by
 low-frequency noise, whose far shore rises to a crest that stands in the sea of
 cloud. That is not decoration. A horizontal plane at this camera is foreshortened

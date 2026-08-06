@@ -269,7 +269,7 @@ export const SCROLL = 0.0015;
  *          depth. This is the number the brief misses by a factor of four, and
  *          it is the whole difference between four layers and one sheet.
  *   depth  how far out the near edge of the sea stands. The foreground island
- *          — shelf, standing rocks, the plum on its ledge — reaches about 30
+ *          — shelf, standing rocks, the plum on its shoulder — reaches about 30
  *          units, and cloud nearer than that is cloud in the room.
  */
 export const SEAT = { v: 0.585, step: 0.026, depth: -64 };

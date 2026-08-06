@@ -19,8 +19,12 @@ import {
 import { resolveTier, createWatchdog, TIERS } from '../js/view3d/quality.js';
 import { sceneryProgress } from '../js/view3d/progress.js';
 import {
-  PALETTES, luminance, LUMA, mixHex, desaturateHex, AURORA_COLOR,
+  PALETTES, luminance, LUMA, mixHex, desaturateHex, AURORA_COLOR, foregroundInk,
 } from '../js/view3d/palette.js';
+import {
+  PLATFORM, platformOutline, stoneOutline, topRelief, symmetryScore, STEPS, CENSER, SMOKE,
+} from '../js/view3d/platform-plan.js';
+import { PLUM, plumSkeleton, framingBranch, turnBetween } from '../js/view3d/plum-plan.js';
 import {
   TIMES, timeOfDayAt, nearestTime, wrapDay, lerpDay, sunDirection, aerialTiers, AERIAL,
 } from '../js/view3d/time-of-day.js';
@@ -2996,6 +3000,372 @@ section('Stage 4 — how the granite is lit');
 
   check('the karst vertex-shader profile is gone with the range it carved',
     !/karstProfile/.test(src) && !/makeRockMaterial/.test(src));
+}
+
+section('Stage 5 — the platform, and the symmetry it has to not have');
+{
+  const src = readFileSync(new URL('../js/view3d/platform-plan.js', import.meta.url), 'utf8');
+  const wrl = readFileSync(new URL('../js/view3d/world.js', import.meta.url), 'utf8');
+  const rock = readFileSync(new URL('../js/view3d/rock.js', import.meta.url), 'utf8');
+  const plan = platformOutline();
+
+  const regular = (n, r = 10) => Array.from({ length: n }, (_, i) => {
+    const a = (i / n) * Math.PI * 2;
+    return [Math.cos(a) * r, Math.sin(a) * r];
+  });
+
+  check('it is a hand-authored Shape extruded with a bevel, not a cylinder', (() => (
+    /new THREE\.Shape\(/.test(rock) && /new THREE\.ExtrudeGeometry\(/.test(rock)
+    && /bevelEnabled: true/.test(rock)
+    // The shelf and its apron were the last two CylinderGeometry in world.js.
+    && !/new THREE\.CylinderGeometry\(/.test(wrl)
+  ))());
+
+  check('~11 points, and no two the same radius', (() => {
+    const rs = plan.map(([x, z]) => Math.hypot(x, z));
+    return plan.length >= 10 && plan.length <= 12
+      && new Set(rs.map((r) => r.toFixed(3))).size === rs.length;
+  })(), `${plan.length} points`);
+
+  check('no two angular gaps are the same either', (() => {
+    // Equal gaps are half of what makes a polygon regular; equal *radii* are
+    // the other half, and either one on its own is enough for the eye.
+    const a = plan.map(([x, z]) => Math.atan2(z, x)).sort((p, q) => p - q);
+    const gaps = a.map((v, i) => {
+      let d = a[(i + 1) % a.length] - v;
+      if (d <= 0) d += Math.PI * 2;
+      return d.toFixed(3);
+    });
+    return new Set(gaps).size === gaps.length;
+  })());
+
+  check('the scorer reads zero on every regular polygon, and on an ellipse', (() => {
+    const ellipse = Array.from({ length: 48 }, (_, i) => {
+      const a = (i / 48) * Math.PI * 2;
+      return [Math.cos(a) * 12, Math.sin(a) * 8];
+    });
+    return [3, 5, 7, 9, 11, 16, 64].every((n) => symmetryScore(regular(n)) < 1e-6)
+      && symmetryScore(ellipse) < 1e-6;
+  })());
+
+  check('the platform silhouette has no detectable regular symmetry',
+    symmetryScore(plan) > 0.04, symmetryScore(plan).toFixed(4));
+
+  check('nor does the meditation stone it sits inside',
+    symmetryScore(stoneOutline()) > 0.04, symmetryScore(stoneOutline()).toFixed(4));
+
+  check('the irregularity is where the camera can see it', (() => {
+    // Only the arc from about 190° to 290° is ever on screen. Points spread
+    // evenly put two of them in there and a straight line between, which is a
+    // lively plan that renders as a smooth curve.
+    const seen = plan.filter(([x, z]) => {
+      const f = frameOf([x, topRelief(x, z), z]);
+      return !f.behind && f.u > -0.05 && f.u < 1.15;
+    });
+    return seen.length >= 5;
+  })());
+
+  check('the rim relief, not the radii, is what breaks the silhouette', (() => {
+    // Measured on the real projection: the eye is 2.03 units above a slab
+    // twenty-one across, so swinging a radius barely moves the edge. Height
+    // does. Both are sampled here and the flat version has to come out flat.
+    const span = (lift) => {
+      let lo = 1;
+      let hi = 0;
+      for (let i = 0; i < plan.length; i++) {
+        const [ax, az] = plan[i];
+        const [bx, bz] = plan[(i + 1) % plan.length];
+        for (let t = 0; t < 1; t += 0.05) {
+          const x = ax + (bx - ax) * t;
+          const z = az + (bz - az) * t;
+          const f = frameOf([x, lift ? topRelief(x, z) : 0, z]);
+          if (f.behind || f.u < 0 || f.u > 1 || f.v > 0.65) continue;
+          lo = Math.min(lo, f.v);
+          hi = Math.max(hi, f.v);
+        }
+      }
+      return hi - lo;
+    };
+    return span(false) < 0.02 && span(true) > 0.035;
+  })());
+
+  check('the chipping is a pure function of position', (() => (
+    // ExtrudeGeometry is not indexed, so a shared vertex is stored two or three
+    // times. Jitter from a counter gives the copies different answers and the
+    // cap tears open; a hash of the position gives them the same one.
+    /function chipAt\(x, z, k\)/.test(rock) && /Math\.sin\(x \* 127\.1 \+ z \* 311\.7/.test(rock)
+  ))());
+
+  check('the top-face chip is the brief\'s ±0.05', PLATFORM.chip === 0.05);
+
+  check('the underside is darker than the top, and it is in the geometry', (() => (
+    // A per-vertex albedo multiplier, because the hemisphere term cannot
+    // separate the underside of an overhang from the wall beside it.
+    /export function applyTint/.test(rock)
+    && /tint: \{ top: 1\.15, bottom: 0\.52/.test(wrl)
+    && /attribute float aTint/.test(readFileSync(new URL('../js/view3d/shaders.js', import.meta.url), 'utf8'))
+  ))());
+
+  check('the island is one mesh, and so is its dressing', (() => (
+    // Two meshes on one material is two draw calls. Stage 5 adds four objects
+    // to a frame that was already at 87 of a budget of 90.
+    /mergeGeometries\(\[\s*slabGeometry/.test(wrl)
+    && /mergeGeometries\(\[stepsGeometry\(STEPS\), censerGeo\]\)/.test(wrl)
+  ))());
+}
+
+section('Stage 5 — the set dressing, against the locked camera');
+{
+  const plan = platformOutline();
+  // The outline's reach at a bearing, so a tread can be checked for overhang.
+  const outlineAt = (x, z) => {
+    const a = Math.atan2(z, x);
+    const pts = plan
+      .map(([px, pz]) => ({ a: Math.atan2(pz, px), r: Math.hypot(px, pz) }))
+      .sort((p, q) => p.a - q.a);
+    let hi = pts.findIndex((p) => p.a >= a);
+    if (hi < 0) hi = 0;
+    const lo = (hi - 1 + pts.length) % pts.length;
+    let da = pts[hi].a - pts[lo].a;
+    if (da <= 0) da += Math.PI * 2;
+    let t = a - pts[lo].a;
+    if (t < 0) t += Math.PI * 2;
+    return pts[lo].r + (pts[hi].r - pts[lo].r) * (t / da);
+  };
+
+  check('no tread overhangs the rock it is cut into', STEPS.every((s) => (
+    Math.hypot(s.at[0], s.at[2]) + Math.max(s.w, s.d) / 2 < outlineAt(s.at[0], s.at[2]) - 0.4
+  )));
+
+  check('the flight descends', STEPS.every((s, i) => i === 0 || s.at[1] < STEPS[i - 1].at[1]));
+
+  check('and it leads off the frame', (() => {
+    const us = STEPS.map((s) => frameOf(s.at).u);
+    // It starts clear of the cultivator at u 0.44 and the last tread is past
+    // the edge of the picture — that is the whole point of it being there.
+    return Math.min(...us) > 0.55 && Math.max(...us) > 1.05;
+  })());
+
+  check('most of it notches the platform\'s own skyline', (() => {
+    // Nothing below the top plane and beyond the rim can be seen from this
+    // camera, so the only reading a path gets at this scale is as a break in
+    // the silhouette. Measured against the rim at each tread's own bearing.
+    const breaks = STEPS.filter((s) => {
+      const a = Math.atan2(s.at[2], s.at[0]);
+      const R = outlineAt(s.at[0], s.at[2]);
+      const rx = Math.cos(a) * R;
+      const rz = Math.sin(a) * R;
+      return frameOf(s.at).v <= frameOf([rx, topRelief(rx, rz), rz]).v + 1e-4;
+    });
+    return breaks.length >= 4;
+  })(), `${STEPS.filter(() => true).length} treads`);
+
+  check('the censer stands on the platform, clear of the figure and of the UI', (() => {
+    const f = frameOf([CENSER.at[0], topRelief(CENSER.at[0], CENSER.at[2]), CENSER.at[2]]);
+    const anchor = CAMERA.composition.anchorU;
+    return Math.hypot(CENSER.at[0], CENSER.at[2]) < outlineAt(CENSER.at[0], CENSER.at[2]) - 1
+      && f.u > anchor + 0.2 && f.u < 1
+      && f.v > CAMERA.safeZone.top && f.v < 1 - CAMERA.safeZone.bottom;
+  })());
+
+  check('its smoke rises into open sky above the near band', (() => {
+    const top = frameOf([
+      CENSER.at[0] + SMOKE.lean[0], CENSER.at[1] + CENSER.height + SMOKE.height,
+      CENSER.at[2] + SMOKE.lean[1],
+    ]);
+    return top.v < horizonV() && top.u > 0 && top.u < 1;
+  })());
+}
+
+section('Stage 5 — 梅, and the end of the leafless tree');
+{
+  const scn = readFileSync(new URL('../js/view3d/scenery.js', import.meta.url), 'utf8');
+  const plumSrc = readFileSync(new URL('../js/view3d/plum-plan.js', import.meta.url), 'utf8');
+  const tree = plumSkeleton();
+
+  check('the recursive branch function is gone', (() => (
+    // It was a self-similar fan of thinning twigs, which is an oak in February.
+    // Nothing in the renderer may grow a tree by recursion any more.
+    !/function plumBranches/.test(scn) && !/plumBranches\(/.test(scn)
+    && !/grow\(to, child/.test(plumSrc)
+  ))());
+
+  check('nothing in the foreground is ever bare', (() => {
+    // The old floor was 0.06 — nine flowers on a thirty-seven-segment tree,
+    // which is a *bare deciduous tree* and shipped in every first screenshot.
+    const T = TIERS.medium;
+    return [0, 1, 2, 3].every((stage) => {
+      const st = defaultState();
+      st.stage = stage;
+      return sceneryProgress(viewModel(st), T).blossom >= 0.25;
+    });
+  })());
+
+  check('the trunk is a chain of 4–6 tapered lengths',
+    tree.trunkDirs.length >= 4 && tree.trunkDirs.length <= 6, `${tree.trunkDirs.length}`);
+
+  check('every joint is an angular change of direction, never a curve', (() => {
+    // Under about fifteen degrees the chain reads as one slightly bent pole and
+    // the segment boundaries become a subdivision artefact rather than the
+    // point of the shape.
+    const turns = tree.trunkDirs.slice(1).map((d, i) => turnBetween(tree.trunkDirs[i], d));
+    return turns.every((t) => t > 0.26) && turns.length >= 3;
+  })(), tree.trunkDirs.slice(1)
+    .map((d, i) => ((turnBetween(tree.trunkDirs[i], d) * 180) / Math.PI).toFixed(0)).join('° '));
+
+  check('3–4 mains, each with 2–3 subs, and it thins aggressively', (() => {
+    const full = plumSkeleton({ subs: 3 });
+    const lean = plumSkeleton({ subs: 2 });
+    const radii = full.segments.map((s) => s.r0);
+    return full.tips.length >= 12 && full.tips.length <= 20
+      && lean.tips.length < full.tips.length
+      // The thinnest twig is under a tenth of the trunk it left.
+      && Math.min(...radii) < Math.max(...radii) * 0.1;
+  })(), `${plumSkeleton().tips.length} tips`);
+
+  check('the blossom is a lit surface, not a fresnel shell', (() => {
+    // A glow material is brightest at the silhouette and empty in the middle,
+    // so a disc facing the camera renders as a *ring*. Two hundred tiny rings
+    // is not blossom.
+    const sh = readFileSync(new URL('../js/view3d/shaders.js', import.meta.url), 'utf8');
+    return /export function makeBlossomMaterial/.test(sh)
+      && /roughness = 0\.7/.test(sh) && /emissive/.test(sh)
+      && /makeBlossomMaterial\(env, \{ color: '#f5d0dc'/.test(scn)
+      && !/makeGlowMaterial/.test(scn);
+  })());
+
+  check('flowers run #f5d0dc to near-white, and cluster at the tips',
+    /nearWhite = new THREE\.Color\('#fff2f4'\)/.test(scn)
+    && /setColorAt\(i, tmpColor\.copy\(petalPink\)\.lerp\(nearWhite/.test(scn)
+    && /const tip = tips\[i % tips\.length\]/.test(scn));
+
+  check('the bark is near-black, taken there from the one place', (() => (
+    /BARK_SINK/.test(scn) && /multiplyScalar\(BARK_SINK\)/.test(scn)
+  ))());
+}
+
+section('Stage 5 — the framing branch');
+{
+  const branch = framingBranch();
+  const box = (() => {
+    let u0 = Infinity; let u1 = -Infinity; let v0 = Infinity; let v1 = -Infinity;
+    for (const s of branch.segments) {
+      for (const p of [s.from, s.to]) {
+        const f = frameOf(p);
+        if (f.behind) continue;
+        u0 = Math.min(u0, f.u); u1 = Math.max(u1, f.u);
+        v0 = Math.min(v0, f.v); v1 = Math.max(v1, f.v);
+      }
+    }
+    return { u0, u1, v0, v1 };
+  })();
+  const clipped = {
+    u0: Math.max(0, box.u0), u1: Math.min(1, box.u1),
+    v0: Math.max(0, box.v0), v1: Math.min(1, box.v1),
+  };
+  const area = (clipped.u1 - clipped.u0) * (clipped.v1 - clipped.v0);
+
+  check('it occupies roughly the top-right fifth of the frame',
+    area > 0.15 && area < 0.26, `${(area * 100).toFixed(1)}%`);
+
+  check('and it is in the top right, not somewhere else that is 20%',
+    clipped.u1 > 0.98 && clipped.u0 > 0.5 && clipped.v0 < 0.02 && clipped.v1 < horizonV());
+
+  check('it is partially out of frame, on two edges', box.u1 > 1.05 && box.v0 < -0.05,
+    `u→${box.u1.toFixed(2)} v→${box.v0.toFixed(2)}`);
+
+  check('it is *near*, which is what makes it large', (() => {
+    // Authored in world coordinates it was retuned four times and still only
+    // covered nine percent, because a limb hanging two and a half units at a
+    // depth of six moves eight percent down the picture. The fix is depth: the
+    // eye is at z = 12.2, so a root at z = +4 is where a world unit is a ninth
+    // of the frame's height instead of a twentieth.
+    const eye = cameraBasis().pos;
+    const near = Math.min(...branch.segments.map((s) => (
+      Math.hypot(s.from[0] - eye[0], s.from[1] - eye[1], s.from[2] - eye[2])
+    )));
+    return near < 12 && unitsPerFrame(branch.segments[0].from[2]) < 10;
+  })());
+
+  check('it is in front of every peak in the range', (() => {
+    const eye = cameraBasis().pos;
+    const branchDepth = Math.max(...branch.segments.map((s) => -(s.to[2] - eye[2])));
+    return peakPlacements().every((p) => -(p.position[2] - eye[2]) > branchDepth);
+  })());
+
+  check('it thins from root to tip and never gets thicker', (() => {
+    const spine = branch.segments.slice(0, 6);
+    return spine.every((s, i) => i === 0 || s.r0 <= spine[i - 1].r0);
+  })());
+
+  check('every limb zigzags across the frame as well as down it', (() => {
+    // Written as three limbs hanging straight down they came out as parallel
+    // vertical bars of even width, which is a gantry, and no amount of taper
+    // rescues the shape of a gantry.
+    const drops = branch.segments.slice(6);
+    const across = drops.map((s) => Math.abs(frameOf(s.to).u - frameOf(s.from).u));
+    return across.filter((d) => d > 0.03).length >= drops.length * 0.6;
+  })());
+
+  check('the tree and the branch share one mesh and one material', (() => {
+    const scn = readFileSync(new URL('../js/view3d/scenery.js', import.meta.url), 'utf8');
+    return /const parts = treeParts\.concat\(frameParts\)/.test(scn)
+      && /new THREE\.InstancedMesh\(branchGeo, barkMat, parts\.length\)/.test(scn);
+  })());
+}
+
+section('Stage 5 — the near band is the bottom of the value ladder');
+{
+  const wrl = readFileSync(new URL('../js/view3d/world.js', import.meta.url), 'utf8');
+  const scn = readFileSync(new URL('../js/view3d/scenery.js', import.meta.url), 'utf8');
+
+  check('the foreground is cut from the realm\'s ink, never from `ground`', (() => (
+    /groundMat\.uniforms\.uColor\.value\.copy\(cur\.fore\)/.test(wrl)
+    && /foregroundInk\(p\.ink\)/.test(wrl)
+  ))());
+
+  check('it is darker than the ink the range is carved from, in every realm',
+    PALETTES.every((p) => luminance(foregroundInk(p.ink)) < luminance(p.ink) * 0.6));
+
+  check('and darker than the nearest rank of peaks under every sky', (() => (
+    PALETTES.every((p) => TIMES.every((t) => {
+      const near = aerialTiers(p.ink, t.horizon)[0];
+      return luminance(foregroundInk(p.ink)) < luminance(near);
+    }))
+  ))());
+
+  check('the loose rock on it is lighter, so it does not vanish into it',
+    PALETTES.every((p) => (
+      luminance(foregroundInk(p.ink, 0.32)) > luminance(foregroundInk(p.ink)) * 1.15
+    )));
+
+  check('the rim term is a trace, because on near-black albedo it is additive', (() => (
+    // At 0.08 it was not a trace: `pow(1 - dot(n, v), 4)` runs at 0.55 over a
+    // top seen from eight degrees above, and the grayscale sheet put the
+    // platform at 82 against a midground of 67 — the nearest rock in the frame
+    // lighter than the range behind it, arriving through a term with nothing to
+    // do with the palette.
+    /rim: 0\.02, bands: 3, flat: true, tint: true/.test(wrl)
+  ))());
+
+  check('the platform is flat shaded, or the rim relief does nothing', (() => (
+    // The top is nine large triangles between the outline points, each tipped a
+    // different way. Smooth-shaded they average into one even grey.
+    /const groundMat = makeInkMaterial\(env, \{[^}]*flat: true/.test(wrl)
+  ))());
+
+  check('no cone survives in the foreground or the range', (() => (
+    // The pines were five stacked ConeGeometry skirts, which is a fir, which is
+    // a Christmas card — and they are the only man-height thing in the
+    // midground, so the eye sizes the whole landform off whatever they are.
+    !/new THREE\.ConeGeometry\(/.test(wrl) && !/new THREE\.ConeGeometry\(/.test(scn)
+  ))());
+
+  check('a pine is layered horizontal plates with sky between them', (() => {
+    const src = readFileSync(new URL('../js/view3d/trees.js', import.meta.url), 'utf8');
+    return /const PLATES = \[/.test(src) && (src.match(/\{ y: /g) || []).length >= 3
+      && /the lit top of the plate/.test(src) && /shaded underside/.test(src);
+  })());
 }
 
 section('Camera lock — the harness ships to nobody');

@@ -262,6 +262,31 @@ export function desaturateHex(hex, amount) {
   return `#${hex2(r + (l - r) * k)}${hex2(g + (l - g) * k)}${hex2(b + (l - b) * k)}`;
 }
 
+/**
+ * The foreground band: the realm's ink, taken most of the way to black.
+ *
+ * A fourth rung on the ladder above, and the one the other three are actually
+ * read against. The value ladder is a *relative* structure — "peaks darker than
+ * the sky", "cloud brighter than the palest rank" — and a relative structure
+ * still needs one end nailed down or the whole thing can float up together,
+ * which is exactly what "the picture looks washed out" means when nothing in
+ * particular is wrong.
+ *
+ * The near band is that nail. It is the closest rock in the frame, it takes
+ * almost no air, and it occupies the bottom third of every shipped shot — so it
+ * is the one thing in the picture with no excuse for being anything but
+ * near-black, at every hour of the day. The foreground used to be painted with
+ * the realm's `ground`, which is a mid tone authored for the far shore, and the
+ * result was a foreground *lighter* than ranges a hundred units behind it.
+ *
+ * `amount` is how far toward black: the island takes the full measure, the
+ * loose rock standing on it a little less so five rocks and a censer do not
+ * vanish into the platform under them.
+ */
+export function foregroundInk(ink, amount = 0.56) {
+  return mixHex(ink, '#000000', amount);
+}
+
 /** Hair and beard change across four brackets of age/lifespan, never raw age. */
 export const AGE_BRACKETS = [
   { max: 0.25, hair: '#171a1f', beard: 0.00 },
