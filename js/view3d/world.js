@@ -5,7 +5,7 @@
 
 import * as THREE from 'three';
 import { mulberry32 } from '../rng.js';
-import { cameraBasis, placeAtDepth } from './framing.js';
+import { cameraBasis, placeAtDepth, clearOfCameras } from './framing.js';
 import { stoneGeometry, slabGeometry, skirtGeometry, mergeGeometries } from './rock.js';
 import { AURORA_COLOR, foregroundInk } from './palette.js';
 import { sunDirection } from './time-of-day.js';
@@ -349,6 +349,15 @@ export function createWorld(env, tier, lighting) {
 
   // A few standing rocks, for the negative space to push against. One draw
   // call: five separate meshes here cost as much as the whole karst range.
+  //
+  // None of them may stand in front of the cultivator. `clearOfCameras` below
+  // is why: rock 4 came out of the stream at a world bearing of −40.3°, five
+  // units out and a unit and a half tall, and the QA profile camera looks in
+  // along −41.8° — so a camera whose entire job is to judge the figure's
+  // silhouette had eighty-five percent of that silhouette behind a rock, in
+  // every contact sheet since stage 4. It is also not only a QA problem: the
+  // player can nudge the game camera, and a rock a degree and a half off her
+  // sightline is a rock that swings across her the moment they do.
   const ROCKS = 5;
   const rocks = new THREE.InstancedMesh(stoneGeometry(97), stoneMat, ROCKS);
   rocks.castShadow = true;
@@ -364,8 +373,12 @@ export function createWorld(env, tier, lighting) {
       const r = 5.2 + rrand() * 3.4;
       const h = 0.7 + rrand() * 2.1;
       const rad = 0.35 + rrand() * 0.6;
-      const x = Math.cos(a) * r;
-      const z = Math.sin(a) * r;
+      // Nudged to the edge of the forbidden wedge rather than re-rolled, so
+      // only a rock that was actually in the way moves at all and the other
+      // four are where stage 5 left them, to the bit.
+      const bearing = clearOfCameras(Math.atan2(Math.cos(a) * r, Math.sin(a) * r));
+      const x = Math.sin(bearing) * r;
+      const z = Math.cos(bearing) * r;
       // The crag hangs below its origin, so it is placed by its crown — and
       // bedded a third of a unit into whatever the rock under it is actually
       // doing. It used to be bedded into a hardcoded zero, which was 0.65 below

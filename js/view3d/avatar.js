@@ -8,6 +8,17 @@ import * as THREE from 'three';
 import { mulberry32 } from '../rng.js';
 import { makeInkMaterial, makeGlowMaterial, makeParticleMaterial, makeRuneRingMaterial } from './shaders.js';
 import { ageBracket } from './palette.js';
+import { mergeGeometries } from './rock.js';
+import {
+  FIGURE, PLEATS, COLLAR, SASH, ARMS, POSE, SLEEVE_TRIM, HEAD, FACE, JIAN, SURFACES,
+  bodyRadius, skirtRings, robeRings, pleatSegments, collarPanels, sashTails,
+  jianAt, tasselStrands,
+} from './figure-plan.js';
+import {
+  pleatedSkirtGeometry, hemBandGeometry, robeGeometry, collarPanelGeometry,
+  tubeGeometry, drapeGeometry, drapeBandGeometry, ribbonGeometry, gradeToHem,
+  shaftGeometry, bevelJaw, orientAlong,
+} from './garment.js';
 
 /** A Points cloud with per-particle scale and seed, ready to animate. */
 function makeSwarm(count, material) {
@@ -60,86 +71,252 @@ export function createAvatar(env, tier) {
   const solid = (mesh) => { mesh.castShadow = true; return mesh; };
 
   /* ------------------------------------------------------------ the body */
+  //
+  // Stage 6: she is not a lathe any more.
+  //
+  // What was here was one `LatheGeometry` from hem to collar with two tori
+  // round it — a cone, and the eye names a cone in about a tenth of a second.
+  // Every piece below exists to take one specific decision away from that
+  // reading: a pleated skirt so the light breaks across the cloth, a crossed
+  // collar so the shape is a Chinese robe and not a bell, sleeve mass so the
+  // outline has arms in it, and a sash with ends so somebody tied it.
+  //
+  // All of it is authored in `figure-plan.js` and built by `garment.js`, and
+  // all of it welds down into three draw calls at the bottom of this section —
+  // fewer than the eight separate primitives it replaces.
 
-  const robeMat = makeInkMaterial(env, { color: '#6b6257', rim: 0.7, bands: 4 });
-  const trimMat = makeInkMaterial(env, { color: '#8f8577', rim: 0.9, bands: 5, emissive: 0 });
-  const skinMat = makeInkMaterial(env, { color: '#b9a893', rim: 0.85, bands: 4 });
-  const hairMat = makeInkMaterial(env, { color: '#171a1f', rim: 0.6, bands: 3 });
+  // Stage 7's material table, spent rather than stored: `roughness` drives a
+  // real Blinn lobe in the ink shader, and `accent`/`accentGlow` are the art
+  // rule — her qi belongs to the sash trim, the hairpin, the qi and the
+  // particles, and to nothing else in the frame. See SURFACES in
+  // figure-plan.js, and `specularFrom` in shaders.js.
+  const robeMat = makeInkMaterial(env, {
+    color: '#6b6257', rim: 0.7, bands: 4, tint: true, ...SURFACES.robe,
+  });
+  const trimMat = makeInkMaterial(env, {
+    color: '#8f8577', rim: 0.9, bands: 5, emissive: 0, ...SURFACES.trim,
+  });
+  const innerMat = makeInkMaterial(env, { color: '#c9c0ae', rim: 0.9, bands: 4, ...SURFACES.inner });
+  const skinMat = makeInkMaterial(env, { color: '#b9a893', rim: 0.85, bands: 4, ...SURFACES.skin });
+  const hairMat = makeInkMaterial(env, { color: '#171a1f', rim: 0.6, bands: 3, ...SURFACES.hair });
+  // Jade, and the three the sword is cut from. These four do not take the
+  // realm's palette: a hairpin is jade in every realm, and lacquer, cord and
+  // silk are what they are at every hour of the day.
+  const pinMat = makeInkMaterial(env, { rim: 1.1, bands: 3, ...SURFACES.pin });
+  const eyeMat = makeInkMaterial(env, { rim: 0.2, bands: 2, ...SURFACES.eye });
+  const lacquerMat = makeInkMaterial(env, { rim: 0.5, bands: 3, ...SURFACES.lacquer });
+  const tasselMat = makeInkMaterial(env, { rim: 0.9, bands: 3, ...SURFACES.tassel });
 
-  // Folded legs: one squashed mass reads better than two bad legs.
-  const lap = new THREE.Mesh(new THREE.SphereGeometry(0.62, 18, 12), robeMat);
-  lap.scale.set(1.18, 0.5, 1.0);
-  lap.position.y = 0.3;
-  body.add(solid(lap));
+  const segments = pleatSegments();
 
-  // Robe: a lathe from hem to collar. The silhouette is the character.
-  const profile = [
-    new THREE.Vector2(0.001, 0.24), new THREE.Vector2(0.68, 0.26), new THREE.Vector2(0.60, 0.46),
-    new THREE.Vector2(0.46, 0.70), new THREE.Vector2(0.36, 0.92), new THREE.Vector2(0.30, 1.06),
-    new THREE.Vector2(0.19, 1.14), new THREE.Vector2(0.001, 1.16),
+  /* 裳 — the pleated lower robe, and the band at its hem -------------------- */
+
+  const robeParts = [
+    gradeToHem(
+      pleatedSkirtGeometry({ rings: skirtRings(), segments, radiusAt: bodyRadius }),
+      { hem: FIGURE.hem - PLEATS.hemWobble, waist: FIGURE.waist },
+    ),
+    robeGeometry({ rings: robeRings(), segments }),
   ];
-  const robe = new THREE.Mesh(new THREE.LatheGeometry(profile, 20), robeMat);
+
+  const trimParts = [
+    hemBandGeometry({
+      segments, radiusAt: bodyRadius, height: PLEATS.trim.height, lift: PLEATS.trim.lift,
+    }),
+  ];
+
+  /* 广袖 — arms, and the sleeves that are most of what is seen of them ------ */
+
+  for (const arm of ARMS) {
+    robeParts.push(tubeGeometry({
+      from: arm.shoulder, to: arm.elbow, rTop: arm.upper[0], rBot: arm.upper[1], sides: 8,
+    }));
+    robeParts.push(tubeGeometry({
+      from: arm.elbow, to: arm.wrist, rTop: arm.fore[0], rBot: arm.fore[1], sides: 8,
+    }));
+    robeParts.push(drapeGeometry({ rings: arm.sleeve.rings, sides: 12, roll: SLEEVE_TRIM.roll }));
+    trimParts.push(drapeBandGeometry({
+      rings: arm.sleeve.rings, height: SLEEVE_TRIM.height, lift: SLEEVE_TRIM.lift, sides: 12,
+    }));
+  }
+
+  /* 交领右衽 — the crossed collar, and the inner robe under it -------------- */
+
+  const innerParts = [];
+  for (const panel of collarPanels()) {
+    const geo = collarPanelGeometry(panel.rows);
+    (panel.tone === 'inner' ? innerParts : trimParts).push(geo);
+  }
+
+  /* 腰带 — two bands, a knot off to the front-left, and the tails ----------- */
+
+  for (const band of SASH.bands) {
+    const torus = new THREE.TorusGeometry(bodyRadius(band.y) + band.lift, band.tube, 6, 26);
+    torus.rotateX(Math.PI / 2);
+    torus.translate(0, band.y, 0);
+    trimParts.push(torus);
+  }
+  {
+    const knotGeo = new THREE.SphereGeometry(1, 10, 7);
+    knotGeo.scale(...SASH.knot.size);
+    knotGeo.rotateY(SASH.knot.tilt);
+    knotGeo.translate(...SASH.knot.at);
+    trimParts.push(knotGeo);
+  }
+
+  // The tails stay their own mesh: they are the one part of the garment with a
+  // free end, so they are the part stage 8 has to be able to move.
+  const tails = new THREE.Mesh(
+    mergeGeometries(sashTails().map((tail) => ribbonGeometry({ points: tail.points, width: tail.width }))),
+    trimMat,
+  );
+  body.add(solid(tails));
+
+  const robe = new THREE.Mesh(mergeGeometries(robeParts), robeMat);
   body.add(solid(robe));
+  const trim = new THREE.Mesh(mergeGeometries(trimParts), trimMat);
+  body.add(solid(trim));
+  const innerCollar = new THREE.Mesh(mergeGeometries(innerParts), innerMat);
+  body.add(solid(innerCollar));
 
-  const collar = new THREE.Mesh(new THREE.TorusGeometry(0.20, 0.035, 6, 18), trimMat);
-  collar.rotation.x = Math.PI / 2;
-  collar.position.y = 1.11;
-  body.add(solid(collar));
+  /* the head, and the hands resting against the robe ---------------------- */
 
-  const sash = new THREE.Mesh(new THREE.TorusGeometry(0.47, 0.045, 6, 22), trimMat);
-  sash.rotation.x = Math.PI / 2;
-  sash.position.y = 0.66;
-  body.add(solid(sash));
+  const skinParts = [];
+  {
+    const neck = new THREE.CylinderGeometry(0.085, 0.10, 0.14, 8);
+    neck.translate(0, FIGURE.neck, 0);
+    skinParts.push(neck);
+  }
+  for (const arm of ARMS) {
+    const hand = new THREE.SphereGeometry(arm.hand.r, 10, 8);
+    hand.scale(1.15, 0.60, 1.0);
+    hand.rotateY(arm.hand.tilt);
+    hand.translate(...arm.hand.at);
+    skinParts.push(hand);
+  }
+  const skin = new THREE.Mesh(mergeGeometries(skinParts), skinMat);
+  body.add(solid(skin));
 
-  const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.085, 0.10, 0.14, 8), skinMat);
-  neck.position.y = 1.20;
-  body.add(solid(neck));
+  // The head is its own group so the tilt in POSE turns everything that grows
+  // out of it — hair, knot, pin, beard — and not just the skull.
+  const headGroup = new THREE.Group();
+  headGroup.position.y = FIGURE.head;
+  headGroup.rotation.set(
+    (POSE.headNodDeg * Math.PI) / 180,
+    (POSE.headTurnDeg * Math.PI) / 180,
+    (-POSE.headTiltDeg * Math.PI) / 180,
+  );
+  body.add(headGroup);
 
-  const head = new THREE.Mesh(new THREE.SphereGeometry(0.205, 18, 14), skinMat);
-  head.scale.set(0.92, 1.06, 0.94);
-  head.position.y = 1.38;
-  body.add(solid(head));
+  // A jaw, not a ball. The taper is in the geometry rather than in a scale,
+  // because a scale narrows the crown as well and she comes out egg-shaped.
+  const head = new THREE.Mesh(
+    bevelJaw(new THREE.SphereGeometry(HEAD.radius, 18, 14), { radius: HEAD.radius, ...HEAD.jaw }),
+    skinMat,
+  );
+  head.scale.set(...HEAD.scale);
+  headGroup.add(solid(head));
 
-  // A cap that sits above the brow. A longer theta swallows the whole face and
-  // the cultivator reads as a black ball.
-  const hair = new THREE.Mesh(new THREE.SphereGeometry(0.213, 18, 10, 0, Math.PI * 2, 0, Math.PI * 0.40), hairMat);
-  hair.position.y = 1.395;
-  body.add(solid(hair));
+  // The hair: a cap above the brow, the knot, and four loose locks. One mesh —
+  // they share a material and they all move with the head.
+  //
+  // A longer cap theta swallows the whole face and the cultivator reads as a
+  // black ball, which is what she did for five stages.
+  const hairParts = [
+    new THREE.SphereGeometry(HEAD.cap.radius, 18, 10, 0, Math.PI * 2, 0, Math.PI * HEAD.cap.theta)
+      .translate(0, HEAD.cap.lift, 0),
+    new THREE.SphereGeometry(HEAD.knot.radius, 10, 8)
+      .scale(...HEAD.knot.scale).translate(...HEAD.knot.at),
+  ];
+  for (const strand of HEAD.strands) {
+    hairParts.push(ribbonGeometry({ points: strand.points, width: strand.width, thickness: 0.026, taper: 0.5 }));
+  }
+  const hair = new THREE.Mesh(mergeGeometries(hairParts), hairMat);
+  headGroup.add(solid(hair));
 
-  const knot = new THREE.Mesh(new THREE.SphereGeometry(0.085, 10, 8), hairMat);
-  knot.position.y = 1.60;
-  knot.scale.set(1, 1.25, 1);
-  body.add(solid(knot));
+  // 冠 — the cloth wrap at the base of the knot. One ring, and it is the line
+  // that says the hair was dressed rather than grown that way.
+  const crownBand = new THREE.Mesh(
+    new THREE.TorusGeometry(HEAD.band.radius, HEAD.band.tube, 6, 16)
+      .rotateX(Math.PI / 2).rotateZ(HEAD.band.tilt).translate(...HEAD.band.at),
+    trimMat,
+  );
+  headGroup.add(solid(crownBand));
 
-  const pin = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.012, 0.34, 5), trimMat);
-  pin.position.y = 1.60;
-  pin.rotation.z = Math.PI / 2.5;
-  body.add(solid(pin));
+  // 簪 — jade, and the only thing on her in a material of its own.
+  const pin = new THREE.Mesh(mergeGeometries([
+    new THREE.CylinderGeometry(HEAD.pin.radius, HEAD.pin.radius * 0.8, HEAD.pin.length, 6),
+    new THREE.SphereGeometry(HEAD.pin.bead, 8, 6).translate(0, HEAD.pin.length / 2, 0),
+  ]), pinMat);
+  pin.position.set(...HEAD.pin.at);
+  pin.rotation.z = HEAD.pin.tilt;
+  headGroup.add(solid(pin));
+
+  // The face: two marks. See FACE in figure-plan.js for why there is no third.
+  const eyes = new THREE.Mesh(mergeGeometries(FACE.eyes.map((eye) => (
+    new THREE.SphereGeometry(eye.radius, 8, 6).scale(...eye.scale).translate(...eye.at)
+  ))), eyeMat);
+  headGroup.add(solid(eyes));
 
   const beard = new THREE.Mesh(new THREE.ConeGeometry(0.10, 0.42, 7, 1), hairMat);
-  beard.position.set(0, 1.10, 0.135);
+  beard.position.set(0, -0.28, 0.135);
   beard.rotation.x = Math.PI;
   beard.scale.set(1, 0.001, 0.7); // grown in by age
-  body.add(solid(beard));
+  headGroup.add(solid(beard));
 
-  // Arms folded into a meditation mudra.
-  for (const side of [-1, 1]) {
-    const upper = new THREE.Mesh(new THREE.CapsuleGeometry(0.10, 0.34, 4, 8), robeMat);
-    upper.position.set(side * 0.29, 0.86, 0.02);
-    upper.rotation.z = side * 0.55;
-    upper.rotation.x = -0.25;
-    body.add(solid(upper));
+  /* 剑 — the jian planted in the rock at her right hand -------------------- */
+  //
+  // In `group`, not in `body`: the body breathes and carries the pose yaw, and
+  // a sword driven into stone does neither.
 
-    const fore = new THREE.Mesh(new THREE.CapsuleGeometry(0.085, 0.30, 4, 8), robeMat);
-    fore.position.set(side * 0.29, 0.60, 0.18);
-    fore.rotation.z = side * 1.15;
-    fore.rotation.x = -0.35;
-    body.add(solid(fore));
+  const grip = [];
+  for (let i = 0; i <= JIAN.grip.cords * 2; i++) {
+    const t = JIAN.grip.span[0] + ((JIAN.grip.span[1] - JIAN.grip.span[0]) * i) / (JIAN.grip.cords * 2);
+    grip.push([t, JIAN.grip.r + (i % 2 ? JIAN.grip.cord : 0)]);
   }
-  const hands = new THREE.Mesh(new THREE.SphereGeometry(0.13, 12, 10), skinMat);
-  hands.scale.set(1.5, 0.55, 1.0);
-  hands.position.set(0, 0.58, 0.24);
-  body.add(solid(hands));
+  const sword = new THREE.Mesh(mergeGeometries([
+    shaftGeometry({
+      from: JIAN.tip, to: JIAN.head, sides: 8,
+      profile: [[0, JIAN.scabbard.r[0]], [JIAN.scabbard.to, JIAN.scabbard.r[1]]],
+    }),
+    shaftGeometry({ from: JIAN.tip, to: JIAN.head, sides: 8, profile: grip, caps: false }),
+  ]), lacquerMat);
+  group.add(solid(sword));
+
+  const fittings = new THREE.Mesh(mergeGeometries([
+    shaftGeometry({
+      from: JIAN.tip, to: JIAN.head, sides: 8,
+      profile: [[JIAN.chape.span[0], JIAN.chape.r], [JIAN.chape.span[1], JIAN.chape.r]],
+    }),
+    shaftGeometry({
+      from: JIAN.tip, to: JIAN.head, sides: 8,
+      profile: [[JIAN.throat.span[0], JIAN.throat.r], [JIAN.throat.span[1], JIAN.throat.r]],
+    }),
+    shaftGeometry({
+      from: JIAN.tip, to: JIAN.head, sides: 6,
+      profile: [[JIAN.pommel.span[0], JIAN.pommel.r], [JIAN.pommel.span[1], JIAN.pommel.r * 0.8]],
+    }),
+    // The guard is flattened across the blade — a disc would be a Japanese
+    // tsuba, and the whole point of the prop is that it is specific.
+    orientAlong(
+      new THREE.BoxGeometry(...JIAN.guard.size),
+      JIAN.tip, JIAN.head, jianAt(JIAN.guard.at),
+    ),
+  ]), trimMat);
+  group.add(solid(fittings));
+
+  // 剑穗 — the tassel. Its own mesh: it is the one free end on a rigid object,
+  // and stage 8 gets to move it.
+  const tassel = new THREE.Mesh(mergeGeometries([
+    ribbonGeometry({ points: JIAN.tassel.cord.points, width: JIAN.tassel.cord.width, thickness: 0.014, taper: 0.2 }),
+    ...tasselStrands().map((s) => tubeGeometry({
+      from: s.from, to: s.to, rTop: s.r, rBot: s.r * 0.55, sides: 5,
+    })),
+  ]), tasselMat);
+  group.add(solid(tassel));
+
+  // She faces +z; a few degrees toward the lens is what opens the collar V.
+  body.rotation.y = POSE.bodyYaw;
 
   /* --------------------------------------------------------------- aura */
 
@@ -283,6 +460,7 @@ export function createAvatar(env, tier) {
   };
   const auraColor = new THREE.Color('#35c98e');
   const goldColor = new THREE.Color('#e8b34b');
+  const WHITE = new THREE.Color('#ffffff');
   const tmpMat = new THREE.Matrix4();
   const tmpQ = new THREE.Quaternion();
   const tmpV = new THREE.Vector3();
@@ -290,7 +468,19 @@ export function createAvatar(env, tier) {
 
   function setPalette(p) {
     robeMat.uniforms.uColor.value.set(p.robe);
-    trimMat.uniforms.uColor.value.set(p.trim);
+    // The trim is the palette's own, lifted toward white.
+    //
+    // Not a re-authoring of eight palettes — a *contrast* decision that belongs
+    // to the figure. `robe` and `trim` are 98 and 133 in luminance at realm 0,
+    // a step of 1.36×, and a 7-pixel band at 1.36× against the cloth behind it
+    // is a smudge rather than a collar. The collar is the one element that
+    // decides what this shape is, so it gets the step it needs to be seen: 1.6×
+    // for the sash, hem and collar, 2× for the inner robe showing above it.
+    trimMat.uniforms.uColor.value.set(p.trim).lerp(WHITE, 0.18);
+    // 中衣 is the same silk, paler again: the inner collar has to read as a
+    // *second* layer above the first, and two tones a realm apart would read as
+    // two garments from two different palettes.
+    innerMat.uniforms.uColor.value.set(p.trim).lerp(WHITE, 0.50);
     auraColor.set(p.aura);
     auraMat.uniforms.uColor.value.copy(auraColor);
     moteMat.uniforms.uColor.value.copy(auraColor);
