@@ -87,7 +87,15 @@ export function createSect(env, tier) {
   t1.visible = false;
   group.add(t1);
 
-  const lanternMat = makeGlowMaterial(env, { color: '#e8b34b', power: 1.2, strength: 1.5, core: 1 });
+  // Lamplight, and not the accent.
+  //
+  // These used to be painted with the day's accent colour, which made a valley
+  // full of teal lanterns at noon and blue ones at night — and, more to the
+  // point, put the player's own qi on a background element three hundred units
+  // away. The accent belongs to her sash trim, her hairpin, her qi and her
+  // particles; a lantern is fire, in every realm and at every hour.
+  const LAMPLIGHT = '#ffb469';
+  const lanternMat = makeGlowMaterial(env, { color: LAMPLIGHT, power: 1.2, strength: 1.5, core: 1 });
   const lanterns = new THREE.InstancedMesh(new THREE.SphereGeometry(0.14, 8, 6), lanternMat, 10);
   lanterns.count = 0;
   group.add(lanterns);
@@ -217,7 +225,7 @@ export function createSect(env, tier) {
   function setPalette(p) {
     jadeMat.uniforms.uColor.value.set(p.robe);
     roofMat.uniforms.uColor.value.set(p.ridges[1]);
-    lanternMat.uniforms.uColor.value.set(p.accent);
+    lanternMat.uniforms.uColor.value.set(LAMPLIGHT);
   }
 
   function sync(vm) {
