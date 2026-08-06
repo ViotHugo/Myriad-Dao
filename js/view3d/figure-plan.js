@@ -28,7 +28,7 @@
 // Node.
 //
 // ---------------------------------------------------------------------------
-// The seat, and the 0.42 that is not hers to fix
+// The island was seated and this file follows it
 //
 // `SEAT` is the single most load-bearing number here and it is *measured*, not
 // chosen. The composition contract puts her feet at y = 0 and calls her 1.71
@@ -55,6 +55,7 @@
 // this build that is knowingly wrong.
 
 import { mulberry32 } from '../rng.js';
+import { SEAT as ROCK_SEAT } from './platform-plan.js';
 
 /* ------------------------------------------------------------- the anchors */
 
@@ -62,12 +63,12 @@ import { mulberry32 } from '../rng.js';
  * Where she sits, and the heights everything else is hung off. World units,
  * with the avatar group at the origin, so these are also world y.
  */
-export const SEAT = 0.42;
+export const SEAT = ROCK_SEAT;
 
 export const FIGURE = {
   seat: SEAT,
   /** Hem line, before the per-pleat wobble below. It rests on the stone. */
-  hem: 0.455,
+  hem: 0.035,
   /** Under the sash: where the lower robe ends and the upper robe takes over. */
   waist: 0.782,
   /** The shoulder line, and the top of the upper robe. */
@@ -90,10 +91,8 @@ export const FIGURE = {
  * panel is on the body by construction rather than by a radius typed twice.
  */
 const RINGS = [
+  [0.035, 0.648], [0.130, 0.622], [0.240, 0.596], [0.350, 0.575],
   [0.455, 0.556], [0.520, 0.545], [0.610, 0.516], [0.700, 0.472],
-  [0.782, 0.428], [0.860, 0.404], [0.950, 0.372], [1.040, 0.325],
-  [1.110, 0.274], [1.160, 0.194], [1.215, 0.105],
-];
 
 /** The mean radius of the garment at a height. Clamped past either end. */
 export function bodyRadius(y) {
@@ -653,8 +652,8 @@ export const FACE = {
  * sword can be moved or re-scaled by moving the two ends.
  */
 export const JIAN = {
-  tip: [1.10, 0.30, 0.22],
-  head: [1.19, 1.42, 0.10],
+  tip: [1.10, -0.12, 0.22],
+  head: [1.19, 1.00, 0.10],
   /** 鞘 — the scabbard, widening a little toward its mouth. */
   scabbard: { to: 0.700, r: [0.040, 0.058] },
   /** 珌 and 口 — the fittings at either end of it. */
@@ -682,8 +681,8 @@ export const JIAN = {
    * rather than as an animation playing.
    */
   tassel: {
-    cord: { points: [[1.206, 1.404, 0.136], [1.232, 1.320, 0.186], [1.248, 1.242, 0.216]], width: 0.020 },
-    bundle: { at: [1.250, 1.236, 0.220], length: 0.208, strands: 5, spread: 0.040, r: 0.016 },
+    cord: { points: [[1.206, 0.984, 0.136], [1.232, 0.900, 0.186], [1.248, 0.822, 0.216]], width: 0.020 },
+    bundle: { at: [1.250, 0.816, 0.220], length: 0.208, strands: 5, spread: 0.040, r: 0.016 },
   },
 };
 
