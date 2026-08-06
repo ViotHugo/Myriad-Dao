@@ -1035,6 +1035,95 @@ materials would be ten calls; the robe, the trim, the inner collar and the tails
 are welded with the same `mergeGeometries` the platform uses, so the whole
 garment is four.
 
+### Stage 7 — the head, the materials, and the sword
+
+Stage 6 gave her a body. This is the rest of her, and the one prop in the frame
+that says what kind of story she is in.
+
+**The head.** The topknot was already there; what it lacked was a reason to be a
+knot rather than a ball. A 冠 band round its base is one ring in the trim tone
+and it is the line that says the hair was *dressed*. Four loose locks — two at
+the temples, two at the nape, all different lengths — cost sixty triangles and
+break the outline in four places, which is where the eye looks to decide whether
+something is alive. And the skull is tapered below the equator rather than
+scaled: `bevelJaw()` narrows and lifts the lower sections so the profile goes
+from circle to soft wedge, because a *scale* narrows the crown as well and she
+comes out egg-shaped.
+
+**The hairpin is the piece that reads.** Pale jade against black hair is a value
+step of about five to one, which at this size beats every other detail on the
+head put together. It is also the only surface on her with a specular lobe worth
+the name and a small emissive lift, so it is the one thing that crosses the
+composer's 0.85 bloom threshold and sparkles — visibly so at night, where the
+exposure is 0.75 and the bloom is turned up to 0.55.
+
+**The face is two marks, and that is a decision rather than a budget.** Her head
+is about twenty-five pixels tall in the shipped frame. A modelled face at
+twenty-five pixels is not a face; it is four dark smudges the eye keeps trying
+to resolve and cannot, which is exactly the uncanny read. Journey and Sky carry
+entire casts on a shape, a silhouette and two marks where the eyes go, and what
+the player supplies is always calmer than anything that could be modelled here.
+The two marks are different sizes at different heights, like everything else on
+this figure.
+
+**Roughness is now spent rather than stored.** The stage's material table hands
+out a roughness per part — robe 0.85, sash and trim 0.40, hair 0.60, skin 0.90,
+hairpin 0.25 — and a number written down and never read is worse than no number,
+so the ink material grew a Blinn lobe to spend it on. `specularFrom()` maps
+roughness to a strength and an exponent through `(1 − r)³`, which is steep on
+purpose: at 0.85 and above the contribution is under 0.3% and the robe, the skin
+and every surface in the landscape shade exactly as they did before the term
+existed. Only the three glossy things in the frame pick up a highlight at all.
+
+**The accent audit, and what it turned up.** The rule is that the accent — the
+player's own qi — belongs to the sash trim, the hairpin, the qi effects and the
+particles, and to nothing else. Two things were quietly breaking it:
+
+- **Every ink surface in the world wore a trace of her aura along its outline.**
+  The half-strength ink edge in `makeInkMaterial` was `uRimColor × fresnel`, and
+  `uRimColor` is the realm's aura. Unconditional, so the pines, the plum trunk,
+  the cranes, the bamboo and every roof in the sect carried it. It is opt-in
+  now: a surface takes `airAt(worldY)` — the sky's own colour at that height,
+  which is what an edge lit by the sky behind it actually is — unless it is one
+  of the four things that owns her colour. Measured on the contact sheet, the
+  landscape moved by at most 2.8 of 255 in luminance and the value ladder did
+  not change order; it is a colour change, not a value change.
+- **The sect's lanterns were painted with the day's accent**, which made a
+  valley of teal lanterns at noon and blue ones at night, three hundred units
+  away, in the colour that is supposed to be hers alone. A lantern is fire, in
+  every realm and at every hour, and it is `#ffb469` now.
+
+Verified the way the stage says to verify it: tint the accent magenta and shoot
+the sheet. Magenta appears on the qi motes, the garment's trim and the hairpin.
+Nothing in the range, the sky, the cloud, the terrain, the plum, the pines or
+the foreground rock takes a pixel of it.
+
+**The jian.** The highest-signal object available for this setting, and it does
+a second job the character cannot do for herself: she is a seated triangle,
+wider than she is tall, and the sword is a hard vertical eighty pixels long
+standing right beside her. A composition of one mound gets an axis.
+
+Planted, not laid across her lap — her lap is under two wide sleeves and a sash
+by the time stage 6 is done, and a sword laid in it would be four visible pixels
+of guard. Everything about the placement is measured: it lands at u 0.58–0.60
+with her own outline reaching 0.553, so the two shapes never merge; its head
+sits at v 0.50, under the horizon at 0.45 and under her crown at 0.475, so it
+reads against the bright cloud without competing with her; and its tip is at
+y 0.30, twelve centimetres inside a stone whose top face is at 0.42, so it is
+*in* the rock rather than standing on it.
+
+The grip is six rings alternating proud and slack. At six CSS pixels across, a
+smooth cylinder and a wrapped one are the same picture — a ribbed one catches
+the key light six times and reads as bound cord. It is the pleat trick, one
+scale down.
+
+The tassel is the one thing in the frame with no reason to be still, which is
+why it is there: stage 8 gets free motion at the far end of a rigid object, and
+motion at the end of something rigid reads as air moving rather than as an
+animation playing. It hangs clear of the scabbard by more than its own radius at
+every strand, which the suite checks — a free end inside the object it hangs
+from is not free.
+
 ### Composing in frame space
 
 The camera is authored and fixed, so the frame — not the world — is the thing
@@ -1495,3 +1584,19 @@ just quietly stops working — so they are the ones worth spending assertions on
   following the terrain.
 - The `close` framing used by the Arts tab is a tighter version of the world
   shot; it does not yet show the meridian constellation as its own composition.
+- **The foreground island sits 0.36 too high, and the figure is inside it.**
+  `slabGeometry` builds an `ExtrudeGeometry` with `bevelEnabled`, and three adds
+  the bevel *outside* the extrusion — so a slab's top cap is a whole
+  `bevelThickness` above the y = 0 its own documentation claims. Measured off
+  the built geometry: the platform's top face under the cultivator is at +0.36
+  and the meditation stone's at +0.42, against a composition contract that puts
+  her feet at 0. Everything placed at "y = 0, the top of the platform" is
+  sunk by the same amount — the censer is half buried, the plum's four root
+  stubs are invisible, and the cultivator reads 10.2% of frame height where the
+  contract says 13.5%. Stage 6 worked around it by composing the garment against
+  the surface she actually sits on (`SEAT` in `figure-plan.js`) and asserting
+  that nothing is authored below it. The fix is to lower the whole island by
+  0.36 and re-seat the props with it, which moves the platform rim, the treads
+  that notch the skyline and the plum's roots — a stage-5 change, needing
+  stage-5 contact-sheet evidence, and not one to make quietly inside a stage
+  about clothes.

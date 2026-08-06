@@ -284,10 +284,35 @@ function litUniforms(env, extra = {}) {
  * The workhorse: a quantised light ramp with a rim light and hand-rolled fog.
  * Everything solid in the world uses this — cultivator, buildings, stone.
  */
+/**
+ * Roughness, as the two numbers a specular lobe actually needs.
+ *
+ * Stage 7 hands out a roughness per part — robe 0.85, sash 0.40, hair 0.60,
+ * skin 0.90, hairpin 0.25 — and a number stored and never read is worse than
+ * no number at all, so the ink material grew a lobe to spend it on. It is
+ * Blinn, not GGX: this is a toon renderer with a four-step ramp, and the whole
+ * job of the term is to put one hot point on the jade pin and a soft sheen
+ * along the hair so the rim light has something to catch.
+ *
+ * The mapping is deliberately steep. `(1 - r)³` means everything at 0.85 and
+ * above contributes essentially nothing — the robe and the skin keep the flat
+ * ink look they had before this existed, and only the three glossy things in
+ * the frame pick up a highlight at all.
+ */
+export function specularFrom(roughness) {
+  const r = Math.max(0, Math.min(1, roughness));
+  return {
+    gloss: (1 - r) ** 3 * 0.85,
+    shine: 8 + (1 - r) ** 1.5 * 88,
+  };
+}
+
 export function makeInkMaterial(env, {
   color = '#5a6472', rim = 0.55, bands = null, emissive = 0, flat = false,
   transparent = false, opacity = 1, fogCap = 1, tint = false,
+  roughness = 1, accent = 0, accentGlow = 0,
 } = {}) {
+  const spec = specularFrom(roughness);
   // `tint` reads a per-vertex albedo multiplier off an `aTint` attribute — the
   // foreground platform bakes "darker underneath, lighter on top" into its
   // geometry with it (see applyTint in rock.js). It is opt-in per material and
@@ -309,6 +334,10 @@ export function makeInkMaterial(env, {
       uOpacity: { value: opacity },
       uBandsOverride: { value: bands === null ? -1 : bands },
       uFogCap: { value: fogCap },
+      uGloss: { value: spec.gloss },
+      uShine: { value: spec.shine },
+      uAccent: { value: accent },
+      uAccentGlow: { value: accentGlow },
     }),
     transparent,
     flatShading: flat,
@@ -337,7 +366,7 @@ export function makeInkMaterial(env, {
     fragmentShader: /* glsl */ `
       uniform vec3 uColor, uLightColor, uRimColor, uRimLightDir, uRimLightColor;
       uniform float uRim, uEmissive, uOpacity, uBands, uBandsOverride, uDesat, uFogCap;
-      uniform float uSunPower, uRimLightPower;
+      uniform float uSunPower, uRimLightPower, uGloss, uShine, uAccent, uAccentGlow;
       ${SHADOW_PARS_FRAG}
       ${KEY}
       ${HEMI}
@@ -384,11 +413,31 @@ export function makeInkMaterial(env, {
         float back = smoothstep(0.20, 0.80, dot(n, normalize(uRimLightDir)));
         col += uRimLightColor * fres * back * uRimLightPower * uRim;
 
+        // A specular lobe, from the roughness. Zero for everything matte, so
+        // the robe, the skin and every surface in the landscape are shaded
+        // exactly as they were before this term existed.
+        if (uGloss > 0.0) {
+          vec3 key = normalize(uLightDir);
+          col += uLightColor * uSunPower * pow(max(dot(n, normalize(key + v)), 0.0), uShine)
+            * uGloss * sunShadow();
+          col += uRimLightColor * uRimLightPower
+            * pow(max(dot(n, normalize(normalize(uRimLightDir) + v)), 0.0), uShine) * uGloss;
+        }
+
         // The ink-wash edge that was already here, halved: the directional rim
         // above now carries the separation, and two full-strength rims stacked
         // on one silhouette is a glow.
-        col += uRimColor * fres * uRim * 0.5;
-        col += albedo * uEmissive;
+        //
+        // What it is *coloured* with is the art rule, not a shading decision.
+        // uRimColor is the player's own qi, and the accent belongs to her — to
+        // the sash trim, the hairpin, the qi and the particles, and to nothing
+        // else in the frame. Everything else takes the air at its own height
+        // instead, which is what an edge lit by the sky behind it actually is.
+        // This term used to be unconditional, so a pine, a plum trunk, a crane,
+        // a stand of bamboo and every roof in the sect all wore a trace of her
+        // aura along their outlines.
+        col += mix(airAt(vWorldY), uRimColor, uAccent) * fres * uRim * 0.5;
+        col += albedo * uEmissive + uRimColor * uAccentGlow;
 
         col = applyFogCapped(col, vDepth, uFogCap, vWorldY);
         col = mix(col, vec3(dot(col, ${LUMA3})), uDesat);

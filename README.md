@@ -10,7 +10,7 @@ framework, no downloaded art. **~1035 KB total**, and installable as a PWA.
 
 ```bash
 npm run serve     # http://localhost:8123
-npm test          # 512 checks
+npm test          # 533 checks
 npm run balance   # assert the A18 pacing table
 npm run sheet     # 4 cameras × 4 skies -> screenshots/contact-sheet.png
 ```
@@ -59,6 +59,17 @@ symmetrical: one shoulder three degrees lower, the head tilted the other way,
 one sleeve draped forward and one fallen to her side. All of it is arithmetic in
 `figure-plan.js`, so the test suite can measure the collar in CSS pixels on a
 414×896 phone rather than take anyone's word for it.
+
+Her face is two dark marks and nothing else — at twenty-five pixels of head, a
+modelled face is four smudges the eye keeps trying to resolve, which is the
+whole of the uncanny read. What carries the head instead is a jade hairpin
+through the topknot, the one surface on her glossy enough to catch the bloom,
+and four loose locks breaking the sphere. Beside her a **jian** is planted in
+the stone: lacquered scabbard, wrapped grip, and a red tassel off the pommel
+that is the only thing in the picture with no reason to be still. And the accent
+colour is hers alone now — her sash trim, her hairpin, her qi, her motes. It
+used to sit on the outline of every pine, plum and roof in the valley; tint it
+magenta and shoot the sheet, and the landscape does not take a pixel of it.
 
 The ground under them is real now too: a subdivided plane displaced by
 low-frequency noise, whose far shore rises to a crest that stands in the sea of
@@ -127,7 +138,7 @@ js/view3d/debug.js       the QA harness. Dev-only, dynamically imported, never s
 tools/contact-sheet.js   drives a headless browser to shoot the 16-frame sheet
 tools/balance-sim.js     plays the engine headlessly, checks pacing
 tools/make-icons.js      regenerates the PWA icons
-tests/run.js             512 checks
+tests/run.js             533 checks
 docs/DESIGN.md           art direction, performance budget, quality tiers, balance
 ```
 

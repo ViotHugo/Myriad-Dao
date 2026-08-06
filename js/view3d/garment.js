@@ -308,6 +308,80 @@ export function ribbonGeometry({ points, width, thickness = 0.018, taper = 0.55 
 }
 
 /**
+ * A shaft with a profile: the scabbard, and the wrapped grip above it.
+ *
+ * `profile` is `[fraction along the axis, radius]`, which is what makes one
+ * builder do both. A scabbard is two entries and a taper; a grip is twelve,
+ * alternating proud and slack, and at six CSS pixels across that ribbing is the
+ * whole difference between a smooth cylinder and bound cord — it catches the
+ * key light six times instead of once.
+ */
+export function shaftGeometry({ from, to, profile, sides = 8, caps = true }) {
+  const axis = [to[0] - from[0], to[1] - from[1], to[2] - from[2]];
+  const dir = norm(axis);
+  const ref = Math.abs(dir[1]) > 0.94 ? [0, 0, 1] : [0, 1, 0];
+  const u = norm(cross(ref, dir));
+  const w = cross(dir, u);
+  const ringAt = (t, r) => {
+    const c = [from[0] + axis[0] * t, from[1] + axis[1] * t, from[2] + axis[2] * t];
+    return Array.from({ length: sides }, (_, i) => {
+      const a = (i / sides) * Math.PI * 2;
+      const cs = Math.cos(a) * r;
+      const sn = Math.sin(a) * r;
+      return [c[0] + u[0] * cs + w[0] * sn, c[1] + u[1] * cs + w[1] * sn, c[2] + u[2] * cs + w[2] * sn];
+    });
+  };
+  const rows = [];
+  if (caps) rows.push(ringAt(profile[0][0], profile[0][1] * 0.2));
+  for (const [t, r] of profile) rows.push(ringAt(t, r));
+  if (caps) rows.push(ringAt(profile[profile.length - 1][0], profile[profile.length - 1][1] * 0.2));
+  return quiltGeometry(rows, { closed: true });
+}
+
+/**
+ * A jaw, as a taper rather than as geometry.
+ *
+ * Below the equator the section narrows and lifts, so the head goes from a
+ * sphere to a soft wedge and the chin has a plane the key can find. Modelling
+ * an actual jaw at twenty-five pixels of head gives a lump; this is four lines
+ * and it changes the *silhouette*, which is the only thing at this size that
+ * can change.
+ */
+export function bevelJaw(geo, { radius, taper = 0.26, lift = 0.055 }) {
+  const pos = geo.attributes.position;
+  for (let i = 0; i < pos.count; i++) {
+    const y = pos.getY(i);
+    if (y >= 0) continue;
+    const k = Math.min(1, -y / radius);
+    const kk = k * k;
+    pos.setXYZ(
+      i,
+      pos.getX(i) * (1 - taper * kk),
+      y + radius * lift * kk,
+      pos.getZ(i) * (1 - taper * 0.45 * kk),
+    );
+  }
+  pos.needsUpdate = true;
+  geo.computeVertexNormals();
+  return geo;
+}
+
+/**
+ * Stand a Y-up primitive on an arbitrary axis and put it somewhere.
+ *
+ * The guard is a box and the axis it crosses is a leaning sword; this is the
+ * one place in the figure where a stock primitive has to be aimed.
+ */
+export function orientAlong(geo, from, to, at) {
+  const dir = norm([to[0] - from[0], to[1] - from[1], to[2] - from[2]]);
+  const q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), new THREE.Vector3(...dir));
+  geo.applyQuaternion(q);
+  geo.translate(at[0], at[1], at[2]);
+  geo.computeVertexNormals();
+  return geo;
+}
+
+/**
  * The fake ambient occlusion the robe is graded with: a per-vertex albedo
  * multiplier that darkens toward the hem.
  *

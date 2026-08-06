@@ -38,10 +38,12 @@ import {
   horizonV, composition, contactSheetPlan, sunOffsetDeg, clearOfCameras,
 } from '../js/view3d/framing.js';
 import {
-  FIGURE, PLEATS, COLLAR, SASH, ARMS, POSE, SLEEVE_TRIM, bodyRadius, skirtRings,
-  robeRings, pleatSegments, hemOutline, collarPanels, sashTails, cuffs, cuffDrop,
-  figureParts, asymmetryScore, shoulderDropDeg,
+  FIGURE, PLEATS, COLLAR, SASH, ARMS, POSE, SLEEVE_TRIM, HEAD, FACE, JIAN, SURFACES,
+  bodyRadius, skirtRings, robeRings, pleatSegments, hemOutline, collarPanels,
+  sashTails, cuffs, cuffDrop, figureParts, asymmetryScore, shoulderDropDeg,
+  jianAt, jianLength, tasselStrands,
 } from '../js/view3d/figure-plan.js';
+import { specularFrom } from '../js/view3d/shaders.js';
 import { makeNoise3, ridged3 } from '../js/view3d/noise.js';
 import {
   PEAK_MESHES, SCALE_RANGE, peakPlacements, cloudBands,
@@ -3720,6 +3722,243 @@ section('Stage 6 — the garment, and the cone it replaces');
       return Math.abs(d) > (15 * Math.PI) / 180;
     }));
   })());
+}
+
+section('Stage 7 — the head, the two marks that are her face, and the sword');
+{
+  const W = 414;
+  const H = 896;
+  const pxBetween = (framing, a, b) => {
+    const fa = frameOf(a, { framing });
+    const fb = frameOf(b, { framing });
+    return Math.hypot((fa.u - fb.u) * W, (fa.v - fb.v) * H);
+  };
+  const preset = (id) => CAMERA.debugPresets.find((p) => p.id === id).framing;
+  const avatar = readFileSync(new URL('../js/view3d/avatar.js', import.meta.url), 'utf8');
+  const shaders = readFileSync(new URL('../js/view3d/shaders.js', import.meta.url), 'utf8');
+  const view3d = ['world.js', 'scenery.js', 'sect.js', 'trees.js', 'effects.js', 'cloud-sea.js'];
+
+  /* ------------------------------------------------------- head and hair */
+
+  check('the topknot is wrapped at its base', (() => (
+    // 冠. One ring in the trim tone, and the line that says the hair was
+    // dressed rather than grown that way.
+    HEAD.band.radius > HEAD.knot.radius && HEAD.band.tube > 0.015
+    && HEAD.band.at[1] < HEAD.knot.at[1] && HEAD.band.at[1] > HEAD.cap.lift
+    && /crownBand/.test(avatar)
+  ))());
+
+  check('the hairpin is jade, and a material of its own', (() => {
+    // Pale against black hair is a value step of about five to one, which is
+    // why the pin is the piece that reads when nothing else on the head does.
+    const pin = luminance(SURFACES.pin.color);
+    const hair = luminance('#171a1f');
+    return pin / hair > 4 && SURFACES.pin.roughness <= 0.3 && SURFACES.pin.emissive > 0.3
+      && /pinMat/.test(avatar) && !/pin = new THREE\.Mesh\([^)]*trimMat/.test(avatar);
+  })(), `jade ${luminance(SURFACES.pin.color).toFixed(0)} vs hair ${luminance('#171a1f').toFixed(0)}`);
+
+  check('two to four loose strands, none of them twins, all outside the skull', (() => {
+    const n = HEAD.strands.length;
+    if (n < 2 || n > 4) return false;
+    const widths = new Set(HEAD.strands.map((s) => s.width));
+    // Each one starts at the scalp and leaves it: no point inside the skull,
+    // and the loose end well clear of it, which is what breaks the outline.
+    const on = ([x, y, z]) => (x / (HEAD.radius * HEAD.scale[0])) ** 2
+      + (y / (HEAD.radius * HEAD.scale[1])) ** 2
+      + (z / (HEAD.radius * HEAD.scale[2])) ** 2;
+    const outside = HEAD.strands.every((s) => s.points.every((p) => on(p) > 0.98)
+      && on(s.points[s.points.length - 1]) > 1.15);
+    // Two at the temples (+z, the side she faces) and two at the nape (−z).
+    const front = HEAD.strands.filter((s) => s.points[0][2] > 0).length;
+    return widths.size === n && outside && front >= 1 && front <= n - 1;
+  })(), `${HEAD.strands.length} strands`);
+
+  check('the head is not a sphere', (() => {
+    const garment = readFileSync(new URL('../js/view3d/garment.js', import.meta.url), 'utf8');
+    return /export function bevelJaw/.test(garment) && /bevelJaw\(/.test(avatar)
+      && HEAD.jaw.taper > 0.15 && HEAD.jaw.lift > 0;
+  })());
+
+  /* ------------------------------------------------------------- the face */
+
+  check('the face is two marks, and there is no third', (() => (
+    // Two marks and nothing else, in the plan and in the builder alike.
+    FACE.eyes.length === 2
+    && !/const (mouth|nose|nostrils|brows?)\b/.test(avatar)
+    && Object.keys(FACE).length === 1
+  ))());
+
+  check('the marks sit on the front of the head, under the hair', (() => (
+    FACE.eyes.every((eye) => {
+      const [x, y, z] = eye.at;
+      const r = Math.hypot(x / HEAD.scale[0], y / HEAD.scale[1], z / HEAD.scale[2]);
+      // On the surface (not floating, not buried), on the +z side, and below
+      // the cap's lower edge so the hair does not swallow them.
+      return z > 0.1 && Math.abs(r - HEAD.radius) < 0.02
+        && y < HEAD.cap.radius * Math.cos(Math.PI * HEAD.cap.theta) + HEAD.cap.lift;
+    })
+  ))());
+
+  check('they are small, and they are not a mirrored pair', (() => {
+    const [a, b] = FACE.eyes;
+    const width = (eye) => eye.radius * eye.scale[0] * 2;
+    // ~4 CSS px across at the hero framing: a mark, not an eye. A modelled eye
+    // at this size is a smudge the viewer keeps trying to resolve, which is
+    // the whole of the uncanny read.
+    const px = width(a) * 70.6;
+    return px > 2.5 && px < 7
+      && (a.radius !== b.radius || a.at[1] !== b.at[1]);
+  })(), `${(FACE.eyes[0].radius * FACE.eyes[0].scale[0] * 2 * 70.6).toFixed(1)} px across`);
+
+  /* --------------------------------------------------------- the materials */
+
+  check('the material table is the one the stage specified', (() => (
+    SURFACES.robe.roughness === 0.85 && SURFACES.trim.roughness === 0.40
+    && SURFACES.hair.roughness === 0.60 && SURFACES.skin.roughness === 0.90
+    && SURFACES.pin.roughness === 0.25
+  ))());
+
+  check('roughness is spent rather than stored', (() => {
+    // A number written down and never read is worse than no number. The ink
+    // material grew a Blinn lobe to spend these on — and the mapping is steep
+    // on purpose, so the robe and the skin keep the flat ink look the whole
+    // renderer is built on and only the glossy things pick up a highlight.
+    const matte = specularFrom(SURFACES.robe.roughness);
+    const jade = specularFrom(SURFACES.pin.roughness);
+    return /uGloss/.test(shaders) && /uShine/.test(shaders)
+      && /pow\(max\(dot\(n, normalize\(key \+ v\)\), 0\.0\), uShine\)/.test(shaders)
+      && jade.gloss / matte.gloss > 100 && jade.shine > matte.shine * 2
+      && specularFrom(1).gloss === 0;
+  })(), `robe ${specularFrom(0.85).gloss.toFixed(4)}, jade ${specularFrom(0.25).gloss.toFixed(3)}`);
+
+  check('the materials are built from the table, not from loose numbers', (() => (
+    /\.\.\.SURFACES\.robe/.test(avatar) && /\.\.\.SURFACES\.trim/.test(avatar)
+    && /\.\.\.SURFACES\.hair/.test(avatar) && /\.\.\.SURFACES\.skin/.test(avatar)
+    && /\.\.\.SURFACES\.pin/.test(avatar)
+  ))());
+
+  /* ------------------------------------------------ the accent, and its owners */
+
+  check('the accent is opt-in, and the default edge is the air', (() => (
+    // This term used to be unconditional: every ink surface in the world wore a
+    // trace of the player's aura along its outline. Now a surface takes the air
+    // at its own height — which is what an edge lit by the sky behind it
+    // actually is — unless it is one of the four things that owns her colour.
+    /mix\(airAt\(vWorldY\), uRimColor, uAccent\)/.test(shaders)
+    && /accent = 0, accentGlow = 0/.test(shaders)
+  ))());
+
+  check('no terrain, sky or foliage wears it', (() => {
+    // Every ink material outside the figure, checked at its call site. The
+    // granite the whole range is cut from has its own assertion in stage 4;
+    // this is everything else out there.
+    for (const file of view3d) {
+      const src = readFileSync(new URL(`../js/view3d/${file}`, import.meta.url), 'utf8');
+      const calls = src.match(/makeInkMaterial\(env, \{[^}]*\}/g) || [];
+      if (calls.some((c) => /accent/.test(c))) return false;
+    }
+    return true;
+  })());
+
+  check('the sect\'s lanterns are lamplight now, not her qi', (() => {
+    const src = readFileSync(new URL('../js/view3d/sect.js', import.meta.url), 'utf8');
+    // A valley of teal lanterns at noon and blue ones at night, three hundred
+    // units away, wearing the colour that is supposed to be hers alone.
+    return /LAMPLIGHT/.test(src) && !/lanternMat\.uniforms\.uColor\.value\.set\(p\.accent\)/.test(src);
+  })());
+
+  check('and the figure still owns it: trim, hairpin, qi, particles', (() => (
+    SURFACES.trim.accent === 1 && SURFACES.trim.accentGlow > 0
+    && SURFACES.pin.accent === 1 && SURFACES.pin.accentGlow > 0
+    && SURFACES.robe.accent === undefined && SURFACES.skin.accent === undefined
+    && /meridianMat\.uniforms\.uColor\.value\.set\(p\.accent\)/.test(avatar)
+    && /moteMat\.uniforms\.uColor\.value\.copy\(auraColor\)/.test(avatar)
+  ))());
+
+  /* ------------------------------------------------------------- 剑 the jian */
+
+  check('there is a jian, and it has all four of its parts and a tassel', (() => (
+    JIAN.scabbard && JIAN.grip && JIAN.guard && JIAN.pommel && JIAN.tassel
+    && JIAN.scabbard.to > 0.6 && JIAN.grip.span[0] > JIAN.scabbard.to
+    && JIAN.pommel.span[1] === 1
+    && tasselStrands().length >= 3
+  ))());
+
+  check('the grip is wrapped, not turned', (() => (
+    // Six rings alternating proud and slack. At six CSS pixels across, a smooth
+    // cylinder and a wrapped one differ by nothing; a ribbed one catches the
+    // key light six times and reads as bound cord.
+    JIAN.grip.cords >= 4 && JIAN.grip.cord > 0.005
+    && /JIAN\.grip\.cords \* 2/.test(avatar)
+  ))());
+
+  check('it is planted in the rock, not standing on it', (() => (
+    // The tip is below the stone's top face; everything that has to be seen is
+    // above it.
+    JIAN.tip[1] < FIGURE.seat - 0.05 && jianAt(JIAN.scabbard.to)[1] > FIGURE.seat
+    && jianLength() > 1.0
+  ))(), `tip ${JIAN.tip[1]} vs seat ${FIGURE.seat}`);
+
+  check('it stands clear of the figure from every camera', (() => {
+    // She is a seated triangle; the sword is the vertical the composition did
+    // not have. Both of those need the two shapes to stay separate.
+    const gap = (framing) => {
+      let edge = -Infinity;
+      for (let i = 0; i < 96; i++) {
+        const a = (i / 96) * Math.PI * 2;
+        const y = 0.5;
+        edge = Math.max(edge, frameOf([Math.sin(a) * bodyRadius(y), y, Math.cos(a) * bodyRadius(y)],
+          { framing }).u);
+      }
+      const sword = Math.min(frameOf(JIAN.tip, { framing }).u, frameOf(JIAN.head, { framing }).u);
+      return (sword - edge) * W;
+    };
+    return CAMERA.debugPresets.every((p) => gap(p.framing) > 0) && gap(preset('hero')) > 6;
+  })(), `${(() => {
+    let edge = -Infinity;
+    for (let i = 0; i < 96; i++) {
+      const a = (i / 96) * Math.PI * 2;
+      edge = Math.max(edge, frameOf([Math.sin(a) * bodyRadius(0.5), 0.5, Math.cos(a) * bodyRadius(0.5)],
+        { framing: preset('hero') }).u);
+    }
+    return ((Math.min(frameOf(JIAN.tip, { framing: preset('hero') }).u,
+      frameOf(JIAN.head, { framing: preset('hero') }).u) - edge) * W).toFixed(1);
+  })()} px at hero`);
+
+  check('it is a real vertical in the frame, under her crown and inside the picture', (() => {
+    const framing = preset('hero');
+    const tip = frameOf(JIAN.tip, { framing });
+    const head = frameOf(JIAN.head, { framing });
+    const crown = frameOf([0, FIGURE.crown, 0], { framing });
+    // 80-odd pixels of hard vertical beside a figure who is 91 tall, its head
+    // below her crown so it never competes, and clear of the UI bands.
+    return (tip.v - head.v) * H > 60 && head.v > crown.v
+      && head.u > 0 && head.u < 1 && head.v > CAMERA.safeZone.top
+      && tip.v < 1 - CAMERA.safeZone.bottom;
+  })());
+
+  check('the tassel hangs free of the sword it hangs from', (() => {
+    // Clear of the scabbard by more than its own radius at every strand, and
+    // falling well below the pommel — this is the free end stage 8 gets to
+    // move, and a free end that is inside the object is not free.
+    const axis = [JIAN.head[0] - JIAN.tip[0], JIAN.head[1] - JIAN.tip[1], JIAN.head[2] - JIAN.tip[2]];
+    const len = Math.hypot(...axis);
+    const dist = (p) => {
+      const d = [p[0] - JIAN.tip[0], p[1] - JIAN.tip[1], p[2] - JIAN.tip[2]];
+      const t = (d[0] * axis[0] + d[1] * axis[1] + d[2] * axis[2]) / (len * len);
+      const on = [JIAN.tip[0] + axis[0] * t, JIAN.tip[1] + axis[1] * t, JIAN.tip[2] + axis[2] * t];
+      return Math.hypot(p[0] - on[0], p[1] - on[1], p[2] - on[2]);
+    };
+    return tasselStrands().every((s) => dist(s.to) > JIAN.scabbard.r[1] + 0.02)
+      && tasselStrands().every((s) => JIAN.head[1] - s.to[1] > 0.15)
+      && new Set(tasselStrands().map((s) => s.to[1].toFixed(4))).size > 1;
+  })());
+
+  check('the sword does not breathe', (() => (
+    // It is in `group`, not in `body`: the body carries the breath scale and
+    // the pose yaw, and a sword driven into stone does neither.
+    /group\.add\(solid\(sword\)\)/.test(avatar) && /group\.add\(solid\(tassel\)\)/.test(avatar)
+  ))());
 }
 
 section('Camera lock — the harness ships to nobody');

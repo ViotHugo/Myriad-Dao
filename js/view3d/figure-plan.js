@@ -554,3 +554,199 @@ export function asymmetryScore(parts = figureParts()) {
   }
   return sum / parts.length / height;
 }
+
+/* ======================================================================== */
+/*  Stage 7 — the head, the two marks that are her face, and the sword       */
+/* ======================================================================== */
+
+/**
+ * The head, in **head-local** coordinates: the origin is the head's own centre
+ * at `FIGURE.head`, so the whole assembly can be tilted as one and every number
+ * here stays readable. Nothing in this block is authored against world y.
+ *
+ * The topknot was already here and stays; what it lacked was a reason to be a
+ * knot rather than a ball, which is what the 冠 band at its base is — a wrap of
+ * cloth in the trim tone, the one line that says the hair has been *dressed*.
+ *
+ * The strands are the other half of the same idea. A sphere with a smaller
+ * sphere on top is a silhouette with no information in it: four loose locks at
+ * the temples and the nape cost sixty triangles and break the outline in four
+ * places, which is where the eye looks for whether something is alive.
+ */
+export const HEAD = {
+  radius: 0.205,
+  scale: [0.92, 1.06, 0.94],
+  /**
+   * Not a modelled jaw — a taper. Below the equator the section narrows and
+   * lifts, so the profile goes from circle to a soft wedge and the chin has a
+   * plane the key light can find. A modelled jaw at this size is a lump.
+   */
+  jaw: { taper: 0.26, lift: 0.055 },
+  cap: { radius: 0.213, lift: 0.015, theta: 0.40 },
+  knot: { at: [0, 0.222, -0.012], radius: 0.085, scale: [1, 1.25, 1] },
+  /** 冠 — the cloth wrap round the base of the knot. */
+  band: { at: [0, 0.150, -0.006], radius: 0.094, tube: 0.027, tilt: 0.10 },
+  /**
+   * 簪 — the hairpin, and the one thing on her in a material of its own.
+   *
+   * Pale jade against black hair is a value step of about five to one, which is
+   * why it is the piece that reads at this size when nothing else on the head
+   * does. It is also the only part of the figure with a specular lobe worth the
+   * name (roughness 0.25) and a small emissive lift, so it is the one thing on
+   * her that crosses the composer's bloom threshold and sparkles.
+   */
+  pin: { at: [0, 0.216, -0.006], length: 0.345, radius: 0.0125, tilt: Math.PI / 2.5, bead: 0.027 },
+  /** Loose locks: two at the temples, two at the nape. Four different lengths. */
+  strands: [
+    { width: 0.040, points: [[0.158, 0.052, 0.098], [0.178, -0.030, 0.116], [0.184, -0.118, 0.122]] },
+    { width: 0.034, points: [[-0.152, 0.064, 0.110], [-0.166, -0.042, 0.116], [-0.172, -0.146, 0.118]] },
+    { width: 0.046, points: [[0.062, -0.018, -0.184], [0.074, -0.138, -0.196], [0.082, -0.262, -0.192]] },
+    { width: 0.036, points: [[-0.086, 0.004, -0.176], [-0.096, -0.108, -0.188], [-0.102, -0.216, -0.184]] },
+  ],
+};
+
+/**
+ * The face, and the argument for not having one.
+ *
+ * Two dark marks. No mouth, no nose, no brow. At 13% of frame height her whole
+ * head is about twenty-five pixels tall, and a modelled face at twenty-five
+ * pixels is not a face — it is four dark smudges that the eye keeps trying to
+ * resolve and cannot, which is precisely the uncanny read. Journey and Sky both
+ * carry entire casts of characters on exactly this: a shape, a silhouette, and
+ * two marks where the eyes go. The player supplies the rest, and what they
+ * supply is always calmer than anything that could be modelled here.
+ *
+ * The two marks are not the same size or at the same height, for the same
+ * reason nothing else on this figure is mirrored.
+ */
+export const FACE = {
+  eyes: [
+    { at: [0.074, 0.014, 0.178], radius: 0.030, scale: [1.0, 0.56, 0.5] },
+    { at: [-0.069, 0.006, 0.180], radius: 0.028, scale: [1.0, 0.60, 0.5] },
+  ],
+};
+
+/**
+ * 剑 — a jian, planted in the rock at her right hand.
+ *
+ * The highest-signal object available for this setting: a straight
+ * double-edged sword in a scabbard says *wuxia* faster than anything else that
+ * can be built out of six primitives, and it does a second job the character
+ * cannot do for herself. She is a seated triangle, wider than she is tall; the
+ * sword is a hard vertical a third of a frame-height long, standing right
+ * beside her. A composition of one mound gets an axis.
+ *
+ * Planted rather than laid across her lap for three reasons: her lap is under
+ * two wide sleeves and a sash by the time stage 6 is done, a sword laid in it
+ * would be four visible pixels of guard, and a vertical against the sea of
+ * cloud is the only version of it that survives being 13% of the frame.
+ *
+ * Placement is measured, not chosen. At the hero framing it lands at u 0.27
+ * with the figure's own outline reaching u 0.33 — a clear gap of nineteen CSS
+ * pixels, so the two never merge into one shape — and its head sits at v 0.50,
+ * just under the horizon at 0.45 and just under her crown at 0.475, so it reads
+ * against the bright cloud and does not compete with her. The tip is at y 0.30,
+ * twelve centimetres inside a stone whose top face is at 0.42: it is *in* the
+ * rock, not standing on it.
+ *
+ * Everything below is a fraction along the axis from tip to head, so the whole
+ * sword can be moved or re-scaled by moving the two ends.
+ */
+export const JIAN = {
+  tip: [1.10, 0.30, 0.22],
+  head: [1.19, 1.42, 0.10],
+  /** 鞘 — the scabbard, widening a little toward its mouth. */
+  scabbard: { to: 0.700, r: [0.040, 0.058] },
+  /** 珌 and 口 — the fittings at either end of it. */
+  chape: { span: [0.010, 0.080], r: 0.065 },
+  throat: { span: [0.630, 0.700], r: 0.067 },
+  /** 镡 — the guard: flattened across the blade, not a disc. */
+  guard: { at: 0.722, size: [0.128, 0.026, 0.058] },
+  /**
+   * 柄 — the grip, and the cord wrapped round it.
+   *
+   * Six rings alternating proud and slack. It is the same trick as the pleats
+   * one scale down: at six CSS pixels wide a smooth cylinder and a wrapped one
+   * differ by nothing at all, but a *ribbed* one catches the key light six
+   * times and reads as bound cord.
+   */
+  grip: { span: [0.735, 0.945], r: 0.038, cords: 6, cord: 0.010 },
+  /** 首 — the pommel the tassel hangs from. */
+  pommel: { span: [0.945, 1.0], r: 0.056 },
+  /**
+   * 剑穗 — the tassel.
+   *
+   * The one thing in the frame that has no reason to be still, which is exactly
+   * why it is here: stage 8 gets a free piece of motion at the far end of a
+   * fixed object, and motion at the end of something rigid reads as air moving
+   * rather than as an animation playing.
+   */
+  tassel: {
+    cord: { points: [[1.206, 1.404, 0.136], [1.232, 1.320, 0.186], [1.248, 1.242, 0.216]], width: 0.020 },
+    bundle: { at: [1.250, 1.236, 0.220], length: 0.208, strands: 5, spread: 0.040, r: 0.016 },
+  },
+};
+
+/**
+ * The material table, as data rather than as five numbers scattered through the
+ * builder.
+ *
+ * Roughness is the interesting column and it is *spent*, not stored: the ink
+ * material grew a Blinn lobe in stage 7 so these mean something (see
+ * `specularFrom` in shaders.js). The mapping is steep — everything at 0.85 and
+ * above contributes essentially nothing — so the robe and the skin keep the
+ * flat ink look the whole renderer is built on, and the three glossy things
+ * are the ones that were meant to be glossy.
+ *
+ * `accent` and `accentGlow` are the art rule, not a look. The accent is the
+ * player's own qi, and stage 7's discipline gives it to exactly four things:
+ * the sash trim, the hairpin, the qi effects and the particles. Nothing else
+ * on this figure and nothing at all in the landscape may carry it, which is
+ * asserted rather than remembered.
+ */
+export const SURFACES = {
+  robe: { roughness: 0.85 },
+  trim: { roughness: 0.40, accent: 1, accentGlow: 0.05 },
+  inner: { roughness: 0.45 },
+  hair: { roughness: 0.60 },
+  skin: { roughness: 0.90 },
+  pin: { roughness: 0.25, emissive: 0.55, accent: 1, accentGlow: 0.12, color: '#d8e8d6' },
+  eye: { roughness: 0.9, color: '#14171c' },
+  lacquer: { roughness: 0.55, color: '#20242c' },
+  cord: { roughness: 0.7, color: '#5c4a44' },
+  tassel: { roughness: 0.5, color: '#a8564c' },
+};
+
+/** A point on the jian's axis, at a fraction from tip to head. */
+export function jianAt(t) {
+  return [
+    JIAN.tip[0] + (JIAN.head[0] - JIAN.tip[0]) * t,
+    JIAN.tip[1] + (JIAN.head[1] - JIAN.tip[1]) * t,
+    JIAN.tip[2] + (JIAN.head[2] - JIAN.tip[2]) * t,
+  ];
+}
+
+/** How long the sword is, tip to pommel. */
+export function jianLength() {
+  return Math.hypot(
+    JIAN.head[0] - JIAN.tip[0], JIAN.head[1] - JIAN.tip[1], JIAN.head[2] - JIAN.tip[2],
+  );
+}
+
+/** The tassel's hanging strands, as world-space segments. */
+export function tasselStrands() {
+  const { bundle } = JIAN.tassel;
+  return Array.from({ length: bundle.strands }, (_, i) => {
+    const a = (i / bundle.strands) * Math.PI * 2;
+    const sx = Math.sin(a) * bundle.spread;
+    const sz = Math.cos(a) * bundle.spread;
+    // Each one a different length, so the bundle ends in a ragged line rather
+    // than a machined one.
+    const len = bundle.length * (0.78 + ((i * 7) % 5) / 5 * 0.28);
+    return {
+      from: [bundle.at[0] + sx * 0.35, bundle.at[1], bundle.at[2] + sz * 0.35],
+      to: [bundle.at[0] + sx, bundle.at[1] - len, bundle.at[2] + sz],
+      r: bundle.r * (0.7 + ((i * 3) % 4) / 4 * 0.5),
+    };
+  });
+}

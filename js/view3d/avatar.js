@@ -10,12 +10,14 @@ import { makeInkMaterial, makeGlowMaterial, makeParticleMaterial, makeRuneRingMa
 import { ageBracket } from './palette.js';
 import { mergeGeometries } from './rock.js';
 import {
-  FIGURE, PLEATS, COLLAR, SASH, ARMS, POSE, SLEEVE_TRIM,
+  FIGURE, PLEATS, COLLAR, SASH, ARMS, POSE, SLEEVE_TRIM, HEAD, FACE, JIAN, SURFACES,
   bodyRadius, skirtRings, robeRings, pleatSegments, collarPanels, sashTails,
+  jianAt, tasselStrands,
 } from './figure-plan.js';
 import {
   pleatedSkirtGeometry, hemBandGeometry, robeGeometry, collarPanelGeometry,
   tubeGeometry, drapeGeometry, drapeBandGeometry, ribbonGeometry, gradeToHem,
+  shaftGeometry, bevelJaw, orientAlong,
 } from './garment.js';
 
 /** A Points cloud with per-particle scale and seed, ready to animate. */
@@ -83,11 +85,27 @@ export function createAvatar(env, tier) {
   // all of it welds down into three draw calls at the bottom of this section —
   // fewer than the eight separate primitives it replaces.
 
-  const robeMat = makeInkMaterial(env, { color: '#6b6257', rim: 0.7, bands: 4, tint: true });
-  const trimMat = makeInkMaterial(env, { color: '#8f8577', rim: 0.9, bands: 5, emissive: 0 });
-  const innerMat = makeInkMaterial(env, { color: '#c9c0ae', rim: 0.9, bands: 4 });
-  const skinMat = makeInkMaterial(env, { color: '#b9a893', rim: 0.85, bands: 4 });
-  const hairMat = makeInkMaterial(env, { color: '#171a1f', rim: 0.6, bands: 3 });
+  // Stage 7's material table, spent rather than stored: `roughness` drives a
+  // real Blinn lobe in the ink shader, and `accent`/`accentGlow` are the art
+  // rule — her qi belongs to the sash trim, the hairpin, the qi and the
+  // particles, and to nothing else in the frame. See SURFACES in
+  // figure-plan.js, and `specularFrom` in shaders.js.
+  const robeMat = makeInkMaterial(env, {
+    color: '#6b6257', rim: 0.7, bands: 4, tint: true, ...SURFACES.robe,
+  });
+  const trimMat = makeInkMaterial(env, {
+    color: '#8f8577', rim: 0.9, bands: 5, emissive: 0, ...SURFACES.trim,
+  });
+  const innerMat = makeInkMaterial(env, { color: '#c9c0ae', rim: 0.9, bands: 4, ...SURFACES.inner });
+  const skinMat = makeInkMaterial(env, { color: '#b9a893', rim: 0.85, bands: 4, ...SURFACES.skin });
+  const hairMat = makeInkMaterial(env, { color: '#171a1f', rim: 0.6, bands: 3, ...SURFACES.hair });
+  // Jade, and the three the sword is cut from. These four do not take the
+  // realm's palette: a hairpin is jade in every realm, and lacquer, cord and
+  // silk are what they are at every hour of the day.
+  const pinMat = makeInkMaterial(env, { rim: 1.1, bands: 3, ...SURFACES.pin });
+  const eyeMat = makeInkMaterial(env, { rim: 0.2, bands: 2, ...SURFACES.eye });
+  const lacquerMat = makeInkMaterial(env, { rim: 0.5, bands: 3, ...SURFACES.lacquer });
+  const tasselMat = makeInkMaterial(env, { rim: 0.9, bands: 3, ...SURFACES.tassel });
 
   const segments = pleatSegments();
 
@@ -190,31 +208,112 @@ export function createAvatar(env, tier) {
   );
   body.add(headGroup);
 
-  const head = new THREE.Mesh(new THREE.SphereGeometry(0.205, 18, 14), skinMat);
-  head.scale.set(0.92, 1.06, 0.94);
+  // A jaw, not a ball. The taper is in the geometry rather than in a scale,
+  // because a scale narrows the crown as well and she comes out egg-shaped.
+  const head = new THREE.Mesh(
+    bevelJaw(new THREE.SphereGeometry(HEAD.radius, 18, 14), { radius: HEAD.radius, ...HEAD.jaw }),
+    skinMat,
+  );
+  head.scale.set(...HEAD.scale);
   headGroup.add(solid(head));
 
-  // A cap that sits above the brow. A longer theta swallows the whole face and
-  // the cultivator reads as a black ball.
-  const hair = new THREE.Mesh(new THREE.SphereGeometry(0.213, 18, 10, 0, Math.PI * 2, 0, Math.PI * 0.40), hairMat);
-  hair.position.y = 0.015;
+  // The hair: a cap above the brow, the knot, and four loose locks. One mesh —
+  // they share a material and they all move with the head.
+  //
+  // A longer cap theta swallows the whole face and the cultivator reads as a
+  // black ball, which is what she did for five stages.
+  const hairParts = [
+    new THREE.SphereGeometry(HEAD.cap.radius, 18, 10, 0, Math.PI * 2, 0, Math.PI * HEAD.cap.theta)
+      .translate(0, HEAD.cap.lift, 0),
+    new THREE.SphereGeometry(HEAD.knot.radius, 10, 8)
+      .scale(...HEAD.knot.scale).translate(...HEAD.knot.at),
+  ];
+  for (const strand of HEAD.strands) {
+    hairParts.push(ribbonGeometry({ points: strand.points, width: strand.width, thickness: 0.026, taper: 0.5 }));
+  }
+  const hair = new THREE.Mesh(mergeGeometries(hairParts), hairMat);
   headGroup.add(solid(hair));
 
-  const knot = new THREE.Mesh(new THREE.SphereGeometry(0.085, 10, 8), hairMat);
-  knot.position.y = 0.22;
-  knot.scale.set(1, 1.25, 1);
-  headGroup.add(solid(knot));
+  // 冠 — the cloth wrap at the base of the knot. One ring, and it is the line
+  // that says the hair was dressed rather than grown that way.
+  const crownBand = new THREE.Mesh(
+    new THREE.TorusGeometry(HEAD.band.radius, HEAD.band.tube, 6, 16)
+      .rotateX(Math.PI / 2).rotateZ(HEAD.band.tilt).translate(...HEAD.band.at),
+    trimMat,
+  );
+  headGroup.add(solid(crownBand));
 
-  const pin = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.012, 0.34, 5), trimMat);
-  pin.position.y = 0.22;
-  pin.rotation.z = Math.PI / 2.5;
+  // 簪 — jade, and the only thing on her in a material of its own.
+  const pin = new THREE.Mesh(mergeGeometries([
+    new THREE.CylinderGeometry(HEAD.pin.radius, HEAD.pin.radius * 0.8, HEAD.pin.length, 6),
+    new THREE.SphereGeometry(HEAD.pin.bead, 8, 6).translate(0, HEAD.pin.length / 2, 0),
+  ]), pinMat);
+  pin.position.set(...HEAD.pin.at);
+  pin.rotation.z = HEAD.pin.tilt;
   headGroup.add(solid(pin));
+
+  // The face: two marks. See FACE in figure-plan.js for why there is no third.
+  const eyes = new THREE.Mesh(mergeGeometries(FACE.eyes.map((eye) => (
+    new THREE.SphereGeometry(eye.radius, 8, 6).scale(...eye.scale).translate(...eye.at)
+  ))), eyeMat);
+  headGroup.add(solid(eyes));
 
   const beard = new THREE.Mesh(new THREE.ConeGeometry(0.10, 0.42, 7, 1), hairMat);
   beard.position.set(0, -0.28, 0.135);
   beard.rotation.x = Math.PI;
   beard.scale.set(1, 0.001, 0.7); // grown in by age
   headGroup.add(solid(beard));
+
+  /* 剑 — the jian planted in the rock at her right hand -------------------- */
+  //
+  // In `group`, not in `body`: the body breathes and carries the pose yaw, and
+  // a sword driven into stone does neither.
+
+  const grip = [];
+  for (let i = 0; i <= JIAN.grip.cords * 2; i++) {
+    const t = JIAN.grip.span[0] + ((JIAN.grip.span[1] - JIAN.grip.span[0]) * i) / (JIAN.grip.cords * 2);
+    grip.push([t, JIAN.grip.r + (i % 2 ? JIAN.grip.cord : 0)]);
+  }
+  const sword = new THREE.Mesh(mergeGeometries([
+    shaftGeometry({
+      from: JIAN.tip, to: JIAN.head, sides: 8,
+      profile: [[0, JIAN.scabbard.r[0]], [JIAN.scabbard.to, JIAN.scabbard.r[1]]],
+    }),
+    shaftGeometry({ from: JIAN.tip, to: JIAN.head, sides: 8, profile: grip, caps: false }),
+  ]), lacquerMat);
+  group.add(solid(sword));
+
+  const fittings = new THREE.Mesh(mergeGeometries([
+    shaftGeometry({
+      from: JIAN.tip, to: JIAN.head, sides: 8,
+      profile: [[JIAN.chape.span[0], JIAN.chape.r], [JIAN.chape.span[1], JIAN.chape.r]],
+    }),
+    shaftGeometry({
+      from: JIAN.tip, to: JIAN.head, sides: 8,
+      profile: [[JIAN.throat.span[0], JIAN.throat.r], [JIAN.throat.span[1], JIAN.throat.r]],
+    }),
+    shaftGeometry({
+      from: JIAN.tip, to: JIAN.head, sides: 6,
+      profile: [[JIAN.pommel.span[0], JIAN.pommel.r], [JIAN.pommel.span[1], JIAN.pommel.r * 0.8]],
+    }),
+    // The guard is flattened across the blade — a disc would be a Japanese
+    // tsuba, and the whole point of the prop is that it is specific.
+    orientAlong(
+      new THREE.BoxGeometry(...JIAN.guard.size),
+      JIAN.tip, JIAN.head, jianAt(JIAN.guard.at),
+    ),
+  ]), trimMat);
+  group.add(solid(fittings));
+
+  // 剑穗 — the tassel. Its own mesh: it is the one free end on a rigid object,
+  // and stage 8 gets to move it.
+  const tassel = new THREE.Mesh(mergeGeometries([
+    ribbonGeometry({ points: JIAN.tassel.cord.points, width: JIAN.tassel.cord.width, thickness: 0.014, taper: 0.2 }),
+    ...tasselStrands().map((s) => tubeGeometry({
+      from: s.from, to: s.to, rTop: s.r, rBot: s.r * 0.55, sides: 5,
+    })),
+  ]), tasselMat);
+  group.add(solid(tassel));
 
   // She faces +z; a few degrees toward the lens is what opens the collar V.
   body.rotation.y = POSE.bodyYaw;
