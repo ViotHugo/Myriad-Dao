@@ -48,6 +48,7 @@
 
 import * as THREE from 'three';
 import { makeNoise3, ridged3 } from './noise.js';
+import { silhouetteMass } from './peak-plan.js';
 import { mulberry32 } from '../rng.js';
 
 /* --------------------------------------------------------------- helpers */
@@ -136,9 +137,19 @@ function fracture(geo, spec, noise, rand) {
     const x = pos.getX(i);
     const y = pos.getY(i);
     const z = pos.getZ(i);
-    const r = Math.hypot(x, z);
-    if (r < 1e-5) continue;            // the cap centres sit on the axis
     const t = clamp((y + half) / height, 0, 1);
+    const driftEase = t * t * (3 - 2 * t);
+    const dx = (silhouette.drift?.[0] || 0) * height * driftEase;
+    // Drift is authored in the unsquashed blank, just like radial displacement.
+    // Compressing it with z keeps a thin fin's drift proportional to its plan.
+    const dz = (silhouette.drift?.[1] || 0) * height * driftEase * squash;
+    const r = Math.hypot(x, z);
+    if (r < 1e-5) {
+      // Cap centres must follow their rim. Leaving one on-axis puts it outside
+      // a strongly drifted summit fan and flips the cap triangles inside-out.
+      pos.setXYZ(i, dx, y, dz);
+      continue;
+    }
     const theta = Math.atan2(z, x);
     // Shape the mass before cutting its surface. Noise alone changes texture,
     // not outline: applied to a linear cylinder it leaves a corrugated tube.
@@ -146,12 +157,7 @@ function fracture(geo, spec, noise, rand) {
     // it expects — talus at the foot, a projecting shoulder, a pinched neck,
     // then an uneven crag below the crown. They stay smooth across rows, while
     // the three-lobed asymmetry prevents a circular plan from surviving.
-    const base = (silhouette.base || 0) * (1 - t) ** 3;
-    const shoulder = (silhouette.shoulder || 0) * Math.exp(-(((t - 0.30) / 0.16) ** 2));
-    const waist = (silhouette.waist || 0) * Math.exp(-(((t - 0.67) / 0.13) ** 2));
-    const crag = (silhouette.crag || 0) * smooth(0.72, 0.92, t) * (1 - smooth(0.93, 1, t));
-    const buttress = 1 + (silhouette.asym || 0) * Math.cos(theta * 3 + spec.seed * 0.017) * (1 - t * 0.45);
-    const mass = Math.max(0.58, (1 + base + shoulder - waist + crag) * buttress);
+    const mass = silhouetteMass(silhouette, t, theta);
     // Fast around the column, slow up it: creases that run vertically.
     const n = ridged3(noise, x * ridge.freq, y * ridge.freq * 0.34, z * ridge.freq, { octaves: 2 });
     let rs = 1 + ridge.amp * (n - 0.62);
@@ -166,9 +172,6 @@ function fracture(geo, spec, noise, rand) {
     // A slight curved drift moves successive rings off-axis. Unlike rotating
     // the finished instance, this creates an overhang and a different outline
     // on either side while keeping the foot planted and the cap welded.
-    const driftEase = t * t * (3 - 2 * t);
-    const dx = (silhouette.drift?.[0] || 0) * height * driftEase;
-    const dz = (silhouette.drift?.[1] || 0) * height * driftEase;
     pos.setXYZ(i, x * rs * mass + dx, y, z * rs * mass * squash + dz);
   }
 }

@@ -63,6 +63,42 @@ export const SCALE_UNIT = 42;
 /** The authored range of instance scale. Asserted, both ends. */
 export const SCALE_RANGE = [0.6, 2.2];
 
+const smooth = (a, b, x) => {
+  const t = Math.max(0, Math.min(1, (x - a) / (b - a)));
+  return t * t * (3 - 2 * t);
+};
+
+/**
+ * Broad profile of a peak at height `t` and heading `theta`.
+ *
+ * Normalisation is part of the contract: silhouette shaping redistributes the
+ * old cylinder's volume but may not enlarge its authored envelope. Otherwise
+ * individually readable peaks fuse after the placement table has been tuned.
+ * Kept Three-free so the composition suite can measure the actual invariant.
+ */
+export function silhouetteMass(silhouette, t, theta) {
+  if (!silhouette) return 1;
+  const base = silhouette.base * (1 - t) ** 3;
+  const shoulder = silhouette.shoulder * Math.exp(-(((t - 0.30) / 0.16) ** 2));
+  const waist = silhouette.waist * Math.exp(-(((t - 0.67) / 0.13) ** 2));
+  const crag = silhouette.crag * smooth(0.72, 0.92, t) * (1 - smooth(0.93, 1, t));
+  const buttress = 1 + silhouette.asym * Math.cos(theta * 3 + silhouette.phase) * (1 - t * 0.45);
+  return ((1 + base + shoulder - waist + crag) * buttress) / silhouette.envelope;
+}
+
+/** Maximum unnormalised profile, sampled more finely than the source mesh. */
+export function silhouetteEnvelope(silhouette) {
+  let max = 1;
+  const unnormalised = { ...silhouette, envelope: 1 };
+  for (let row = 0; row <= 128; row++) {
+    const t = row / 128;
+    // The angular maximum of the three-lobed term occurs at cos(...) = 1.
+    const theta = -silhouette.phase / 3;
+    max = Math.max(max, silhouetteMass(unnormalised, t, theta));
+  }
+  return max;
+}
+
 /* ------------------------------------------------------------ the meshes */
 
 /**
@@ -121,7 +157,7 @@ export const PEAK_MESHES = [
     radialSegments: 7, heightSegments: 16,
     radiusBottom: 0.19, radiusTop: 0.20, height: 2.30,
     ridge: { freq: 5.4, amp: 0.46 }, shelves: 2, squash: 0.94,
-    silhouette: { base: 0.55, shoulder: 0.18, waist: 0.22, crag: 0.18, asym: 0.16, drift: [0.10, 0.025] },
+    silhouette: { base: 0.55, shoulder: 0.18, waist: 0.22, crag: 0.18, asym: 0.16, drift: [0, 0.015] },
     // Off plumb, and the lean is in the *mesh*: a leaning tower rotated about
     // its own axis leans a different way from every angle, which is exactly the
     // variety an instanced set needs.
@@ -160,6 +196,13 @@ export const PEAK_MESHES = [
     top: 'crown',
   },
 ];
+
+// Derive, rather than hand-tune, the normaliser. Phase is seeded per archetype
+// so their buttresses do not all face the same way.
+for (const mesh of PEAK_MESHES) {
+  mesh.silhouette.phase = mesh.seed * 0.017;
+  mesh.silhouette.envelope = silhouetteEnvelope(mesh.silhouette);
+}
 
 export const MESH_INDEX = Object.fromEntries(PEAK_MESHES.map((m, i) => [m.id, i]));
 

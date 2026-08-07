@@ -53,7 +53,7 @@ import {
 import { specularFrom } from '../js/view3d/surface.js';
 import { makeNoise3, ridged3 } from '../js/view3d/noise.js';
 import {
-  PEAK_MESHES, SCALE_RANGE, peakPlacements, cloudBands,
+  PEAK_MESHES, SCALE_RANGE, peakPlacements, cloudBands, silhouetteMass,
 } from '../js/view3d/peak-plan.js';
 import {
   TERRAIN, TARN, SHORE, terrainField, terrainHeight, crestAt,
@@ -2761,6 +2761,21 @@ section('Stage 4 — six rocks, and no cones');
     && Array.isArray(m.silhouette.drift) && m.silhouette.drift.length === 2
   )));
 
+  check('mass shaping redistributes the authored envelope instead of widening it', (() => (
+    PEAK_MESHES.every((m) => {
+      let max = 0;
+      let min = Infinity;
+      for (let row = 0; row <= 64; row++) {
+        for (let side = 0; side < 36; side++) {
+          const mass = silhouetteMass(m.silhouette, row / 64, side / 36 * Math.PI * 2);
+          max = Math.max(max, mass);
+          min = Math.min(min, mass);
+        }
+      }
+      return max <= 1 + 1e-9 && max > 0.97 && min > 0.35 && max - min > 0.15;
+    })
+  ))());
+
   check('the top profiles are varied, and the set covers the brief', (() => {
     const tops = PEAK_MESHES.map((m) => m.top);
     return tops.includes('plateau') && tops.includes('saddle')
@@ -2789,10 +2804,8 @@ section('Stage 4 — six rocks, and no cones');
     && /const r = Math\.hypot\(x, z\)/.test(src)
   ))());
 
-  check('the silhouette has talus, shoulders, a neck and off-axis drift', (() => (
-    /const base =/.test(src) && /const shoulder =/.test(src)
-    && /const waist =/.test(src) && /const crag =/.test(src)
-    && /const buttress =/.test(src) && /const driftEase =/.test(src)
+  check('cap centres follow the same drift as their rim', (() => (
+    /if \(r < 1e-5\) \{[\s\S]*?pos\.setXYZ\(i, dx, y, dz\)/.test(src)
   ))());
 
   check('a radius may never cross the axis', (() => (
