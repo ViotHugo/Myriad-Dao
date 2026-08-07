@@ -4,7 +4,7 @@
 // cache-first strategy is both correct and the fastest possible boot. Bump
 // CACHE when shipping.
 
-const CACHE = 'myriad-dao-v0.12.0';
+const CACHE = 'myriad-dao-v0.13.0';
 
 const SHELL = [
   './',

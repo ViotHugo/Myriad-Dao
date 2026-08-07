@@ -29,9 +29,10 @@ where **the width of the window on screen literally is the probability**, and
 the marker sweeps at constant speed so a tap lands inside exactly that often.
 
 Behind it all, the range: fourteen granite peaks in three ranks, rising out of a
-luminous sea of cloud. Each one is a cylinder that has been broken — displaced
-by ridged simplex noise into vertical fracture, with two to four horizontal
-shelves snapped through it — and there are six of them, carved once and
+luminous sea of cloud. Each one begins as a cylinder but is reshaped into an
+off-axis mountain mass — talus foot, projecting shoulder, pinched neck and
+uneven crag — before ridged simplex noise cuts vertical fracture and two to four
+horizontal shelves through it. There are six of them, carved once and
 instanced, so no two peaks in the frame share a silhouette. One is a flat
 plateau with a pavilion on it, one a notched saddle, one a leaning spire, one a
 through-arch you can see the sky through. A plum tree buds and blooms and sheds

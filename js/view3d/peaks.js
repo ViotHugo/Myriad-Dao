@@ -128,6 +128,7 @@ function shelfRows(spec, rand) {
  */
 function fracture(geo, spec, noise, rand) {
   const { height, ridge, squash = 1, heightSegments } = spec;
+  const silhouette = spec.silhouette || {};
   const half = height / 2;
   const rows = shelfRows(spec, rand);
   const pos = geo.attributes.position;
@@ -138,6 +139,19 @@ function fracture(geo, spec, noise, rand) {
     const r = Math.hypot(x, z);
     if (r < 1e-5) continue;            // the cap centres sit on the axis
     const t = clamp((y + half) / height, 0, 1);
+    const theta = Math.atan2(z, x);
+    // Shape the mass before cutting its surface. Noise alone changes texture,
+    // not outline: applied to a linear cylinder it leaves a corrugated tube.
+    // These broad, overlapping erosion zones give the eye the Wuxia grammar
+    // it expects — talus at the foot, a projecting shoulder, a pinched neck,
+    // then an uneven crag below the crown. They stay smooth across rows, while
+    // the three-lobed asymmetry prevents a circular plan from surviving.
+    const base = (silhouette.base || 0) * (1 - t) ** 3;
+    const shoulder = (silhouette.shoulder || 0) * Math.exp(-(((t - 0.30) / 0.16) ** 2));
+    const waist = (silhouette.waist || 0) * Math.exp(-(((t - 0.67) / 0.13) ** 2));
+    const crag = (silhouette.crag || 0) * smooth(0.72, 0.92, t) * (1 - smooth(0.93, 1, t));
+    const buttress = 1 + (silhouette.asym || 0) * Math.cos(theta * 3 + spec.seed * 0.017) * (1 - t * 0.45);
+    const mass = Math.max(0.58, (1 + base + shoulder - waist + crag) * buttress);
     // Fast around the column, slow up it: creases that run vertically.
     const n = ridged3(noise, x * ridge.freq, y * ridge.freq * 0.34, z * ridge.freq, { octaves: 2 });
     let rs = 1 + ridge.amp * (n - 0.62);
@@ -149,7 +163,13 @@ function fracture(geo, spec, noise, rand) {
     // share the vertex through each other, and a face with its winding inverted
     // renders as a bright shard with the light on the wrong side of it.
     rs = Math.max(0.35, rs);
-    pos.setXYZ(i, x * rs, y, z * rs * squash);
+    // A slight curved drift moves successive rings off-axis. Unlike rotating
+    // the finished instance, this creates an overhang and a different outline
+    // on either side while keeping the foot planted and the cap welded.
+    const driftEase = t * t * (3 - 2 * t);
+    const dx = (silhouette.drift?.[0] || 0) * height * driftEase;
+    const dz = (silhouette.drift?.[1] || 0) * height * driftEase;
+    pos.setXYZ(i, x * rs * mass + dx, y, z * rs * mass * squash + dz);
   }
 }
 

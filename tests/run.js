@@ -2755,6 +2755,12 @@ section('Stage 4 — six rocks, and no cones');
 
   check('each carries 2–4 shelves', PEAK_MESHES.every((m) => m.shelves >= 2 && m.shelves <= 4));
 
+  check('every blank is reshaped into a mountain mass before surface noise', PEAK_MESHES.every((m) => (
+    m.silhouette && m.silhouette.base >= 0.3 && m.silhouette.shoulder > 0
+    && m.silhouette.waist > 0 && m.silhouette.asym > 0
+    && Array.isArray(m.silhouette.drift) && m.silhouette.drift.length === 2
+  )));
+
   check('the top profiles are varied, and the set covers the brief', (() => {
     const tops = PEAK_MESHES.map((m) => m.top);
     return tops.includes('plateau') && tops.includes('saddle')
@@ -2779,8 +2785,14 @@ section('Stage 4 — six rocks, and no cones');
     // A displacement that is a pure function of the *position* gives the
     // duplicates the same answer; anything that reached for a vertex index
     // would tear the mesh open along the seam and at both caps.
-    /pos\.setXYZ\(i, x \* rs, y, z \* rs \* squash\)/.test(src)
+    /pos\.setXYZ\(i, x \* rs \* mass \+ dx, y, z \* rs \* mass \* squash \+ dz\)/.test(src)
     && /const r = Math\.hypot\(x, z\)/.test(src)
+  ))());
+
+  check('the silhouette has talus, shoulders, a neck and off-axis drift', (() => (
+    /const base =/.test(src) && /const shoulder =/.test(src)
+    && /const waist =/.test(src) && /const crag =/.test(src)
+    && /const buttress =/.test(src) && /const driftEase =/.test(src)
   ))());
 
   check('a radius may never cross the axis', (() => (
