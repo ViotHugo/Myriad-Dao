@@ -63,6 +63,42 @@ export const SCALE_UNIT = 42;
 /** The authored range of instance scale. Asserted, both ends. */
 export const SCALE_RANGE = [0.6, 2.2];
 
+const smooth = (a, b, x) => {
+  const t = Math.max(0, Math.min(1, (x - a) / (b - a)));
+  return t * t * (3 - 2 * t);
+};
+
+/**
+ * Broad profile of a peak at height `t` and heading `theta`.
+ *
+ * Normalisation is part of the contract: silhouette shaping redistributes the
+ * old cylinder's volume but may not enlarge its authored envelope. Otherwise
+ * individually readable peaks fuse after the placement table has been tuned.
+ * Kept Three-free so the composition suite can measure the actual invariant.
+ */
+export function silhouetteMass(silhouette, t, theta) {
+  if (!silhouette) return 1;
+  const base = silhouette.base * (1 - t) ** 3;
+  const shoulder = silhouette.shoulder * Math.exp(-(((t - 0.30) / 0.16) ** 2));
+  const waist = silhouette.waist * Math.exp(-(((t - 0.67) / 0.13) ** 2));
+  const crag = silhouette.crag * smooth(0.72, 0.92, t) * (1 - smooth(0.93, 1, t));
+  const buttress = 1 + silhouette.asym * Math.cos(theta * 3 + silhouette.phase) * (1 - t * 0.45);
+  return ((1 + base + shoulder - waist + crag) * buttress) / silhouette.envelope;
+}
+
+/** Maximum unnormalised profile, sampled more finely than the source mesh. */
+export function silhouetteEnvelope(silhouette) {
+  let max = 1;
+  const unnormalised = { ...silhouette, envelope: 1 };
+  for (let row = 0; row <= 128; row++) {
+    const t = row / 128;
+    // The angular maximum of the three-lobed term occurs at cos(...) = 1.
+    const theta = -silhouette.phase / 3;
+    max = Math.max(max, silhouetteMass(unnormalised, t, theta));
+  }
+  return max;
+}
+
 /* ------------------------------------------------------------ the meshes */
 
 /**
@@ -87,6 +123,9 @@ export const SCALE_RANGE = [0.6, 2.2];
  *   squash            cross-section flattening. A fin is a wall seen edge-on
  *                     from one side and a blade from the other, which is the
  *                     cheapest silhouette in the set.
+ *   silhouette        large-scale erosion, applied before the small granite
+ *                     noise. Base talus, an off-centre shoulder, a pinched
+ *                     neck and lateral drift stop the blanks reading as tubes.
  */
 export const PEAK_MESHES = [
   {
@@ -95,6 +134,7 @@ export const PEAK_MESHES = [
     radialSegments: 9, heightSegments: 14,
     radiusBottom: 0.30, radiusTop: 0.55, height: 1.20,
     ridge: { freq: 3.6, amp: 0.52 }, shelves: 4, squash: 0.88,
+    silhouette: { base: 0.34, shoulder: 0.20, waist: 0.10, crag: 0.08, asym: 0.10, drift: [-0.04, 0.02] },
     // A flat crown with a pavilion on it. The pavilion is the scale cue the
     // summit pines give the rest of the range: a mountain with nothing on it
     // could be thirty metres tall.
@@ -106,6 +146,7 @@ export const PEAK_MESHES = [
     radialSegments: 8, heightSegments: 16,
     radiusBottom: 0.27, radiusTop: 0.42, height: 1.55,
     ridge: { freq: 4.2, amp: 0.56 }, shelves: 3, squash: 0.80,
+    silhouette: { base: 0.42, shoulder: 0.15, waist: 0.16, crag: 0.14, asym: 0.14, drift: [0.06, -0.03] },
     // Two horns with a col between them. Reads at any distance, and it is the
     // one profile that cannot be mistaken for a taper.
     top: 'saddle',
@@ -116,6 +157,7 @@ export const PEAK_MESHES = [
     radialSegments: 7, heightSegments: 16,
     radiusBottom: 0.19, radiusTop: 0.20, height: 2.30,
     ridge: { freq: 5.4, amp: 0.46 }, shelves: 2, squash: 0.94,
+    silhouette: { base: 0.55, shoulder: 0.18, waist: 0.22, crag: 0.18, asym: 0.16, drift: [0, 0.015] },
     // Off plumb, and the lean is in the *mesh*: a leaning tower rotated about
     // its own axis leans a different way from every angle, which is exactly the
     // variety an instanced set needs.
@@ -127,6 +169,7 @@ export const PEAK_MESHES = [
     radialSegments: 8, heightSegments: 13,
     radiusBottom: 0.32, radiusTop: 0.30, height: 1.70,
     ridge: { freq: 3.8, amp: 0.48 }, shelves: 3, squash: 0.86,
+    silhouette: { base: 0.46, shoulder: 0.22, waist: 0.12, crag: 0.10, asym: 0.12, drift: [-0.05, 0.04] },
     // Negative space. A hole in a silhouette is legible at a distance where no
     // amount of surface detail is, and it is the single cheapest thing in this
     // file that says "this is a specific mountain and not a mountain shape".
@@ -138,6 +181,7 @@ export const PEAK_MESHES = [
     radialSegments: 9, heightSegments: 12,
     radiusBottom: 0.37, radiusTop: 0.50, height: 1.05,
     ridge: { freq: 3.0, amp: 0.58 }, shelves: 4, squash: 0.92,
+    silhouette: { base: 0.38, shoulder: 0.30, waist: 0.08, crag: 0.06, asym: 0.18, drift: [0.035, -0.05] },
     // Squat, broad, heavily terraced. The workhorse: a range made only of tall
     // things has no floor to it.
     top: 'crown',
@@ -148,9 +192,17 @@ export const PEAK_MESHES = [
     radialSegments: 7, heightSegments: 15,
     radiusBottom: 0.25, radiusTop: 0.26, height: 1.80,
     ridge: { freq: 5.0, amp: 0.50 }, shelves: 2, squash: 0.52,
+    silhouette: { base: 0.50, shoulder: 0.16, waist: 0.20, crag: 0.16, asym: 0.20, drift: [-0.08, -0.025] },
     top: 'crown',
   },
 ];
+
+// Derive, rather than hand-tune, the normaliser. Phase is seeded per archetype
+// so their buttresses do not all face the same way.
+for (const mesh of PEAK_MESHES) {
+  mesh.silhouette.phase = mesh.seed * 0.017;
+  mesh.silhouette.envelope = silhouetteEnvelope(mesh.silhouette);
+}
 
 export const MESH_INDEX = Object.fromEntries(PEAK_MESHES.map((m, i) => [m.id, i]));
 

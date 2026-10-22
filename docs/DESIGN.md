@@ -640,7 +640,7 @@ five supporting, six distant. Each mesh is carved once, properly, and each peak
 is large enough in frame to be worth looking at. Six draw calls against the old
 three, and the two extra buy every silhouette in the picture.
 
-**A peak is a cylinder that has been broken.** `view3d/peaks.js`, three steps:
+**A peak is a cylinder reshaped, then broken.** `view3d/peaks.js`, four steps:
 
 - **the blank** — `CylinderGeometry(radiusTop, radiusBottom, height, 7–9, 12–16)`.
   Seven sides means the cross-section is *already* a polygon, so spinning an
@@ -648,6 +648,14 @@ three, and the two extra buy every silhouette in the picture.
   angle and a random heading buys nothing. `radiusTop` is never zero: between
   0.15 and 0.6 of the bottom. A cylinder closed to a point is a cone, and a cone
   is the one shape the eye names instantly.
+- **the mass** — broad height zones turn the linear blank into talus, a
+  projecting shoulder, a pinched neck and an upper crag. A seeded three-lobed
+  term breaks the circular plan and a small curved drift takes successive rings
+  off-axis. The profile is normalised to the blank's old maximum radius: this
+  redistributes volume rather than making every peak fatter, so the frame-space
+  placement table keeps its authored sky gaps and the hero silhouettes remain
+  countable. Cap centres receive the same drift as their rims; otherwise a
+  summit centre can fall outside its triangle fan and invert the cap.
 - **the ridges** — every vertex is pushed along its own radius by ridged simplex
   noise, `1 - |noise(p · freq)|`, two octaves, sampled fast around the column and
   slow up it. The absolute value folds the field at every zero crossing, so the
@@ -670,7 +678,9 @@ surface detail survives.
 repeats the seam column at the wrap. Every displacement here is a pure function
 of the vertex's *position*, so the duplicates get the same answer and the mesh
 never splits; anything that reached for a vertex index would tear it open along
-the seam and at both caps. And a radius may never reach the axis — through zero
+the seam and at both caps. The on-axis cap centres follow the profile's lateral
+drift even though radial shaping does not apply to them. And a radius may never
+reach the axis — through zero
 the two triangles sharing the vertex fold through each other and the face renders
 with its winding, and its lighting, inverted: a bright shard in the middle of a
 dark rock.

@@ -48,6 +48,7 @@
 
 import * as THREE from 'three';
 import { makeNoise3, ridged3 } from './noise.js';
+import { silhouetteMass } from './peak-plan.js';
 import { mulberry32 } from '../rng.js';
 
 /* --------------------------------------------------------------- helpers */
@@ -128,6 +129,7 @@ function shelfRows(spec, rand) {
  */
 function fracture(geo, spec, noise, rand) {
   const { height, ridge, squash = 1, heightSegments } = spec;
+  const silhouette = spec.silhouette || {};
   const half = height / 2;
   const rows = shelfRows(spec, rand);
   const pos = geo.attributes.position;
@@ -135,9 +137,27 @@ function fracture(geo, spec, noise, rand) {
     const x = pos.getX(i);
     const y = pos.getY(i);
     const z = pos.getZ(i);
-    const r = Math.hypot(x, z);
-    if (r < 1e-5) continue;            // the cap centres sit on the axis
     const t = clamp((y + half) / height, 0, 1);
+    const driftEase = t * t * (3 - 2 * t);
+    const dx = (silhouette.drift?.[0] || 0) * height * driftEase;
+    // Drift is authored in the unsquashed blank, just like radial displacement.
+    // Compressing it with z keeps a thin fin's drift proportional to its plan.
+    const dz = (silhouette.drift?.[1] || 0) * height * driftEase * squash;
+    const r = Math.hypot(x, z);
+    if (r < 1e-5) {
+      // Cap centres must follow their rim. Leaving one on-axis puts it outside
+      // a strongly drifted summit fan and flips the cap triangles inside-out.
+      pos.setXYZ(i, dx, y, dz);
+      continue;
+    }
+    const theta = Math.atan2(z, x);
+    // Shape the mass before cutting its surface. Noise alone changes texture,
+    // not outline: applied to a linear cylinder it leaves a corrugated tube.
+    // These broad, overlapping erosion zones give the eye the Wuxia grammar
+    // it expects — talus at the foot, a projecting shoulder, a pinched neck,
+    // then an uneven crag below the crown. They stay smooth across rows, while
+    // the three-lobed asymmetry prevents a circular plan from surviving.
+    const mass = silhouetteMass(silhouette, t, theta);
     // Fast around the column, slow up it: creases that run vertically.
     const n = ridged3(noise, x * ridge.freq, y * ridge.freq * 0.34, z * ridge.freq, { octaves: 2 });
     let rs = 1 + ridge.amp * (n - 0.62);
@@ -149,7 +169,10 @@ function fracture(geo, spec, noise, rand) {
     // share the vertex through each other, and a face with its winding inverted
     // renders as a bright shard with the light on the wrong side of it.
     rs = Math.max(0.35, rs);
-    pos.setXYZ(i, x * rs, y, z * rs * squash);
+    // A slight curved drift moves successive rings off-axis. Unlike rotating
+    // the finished instance, this creates an overhang and a different outline
+    // on either side while keeping the foot planted and the cap welded.
+    pos.setXYZ(i, x * rs * mass + dx, y, z * rs * mass * squash + dz);
   }
 }
 

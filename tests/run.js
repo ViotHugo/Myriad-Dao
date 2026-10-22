@@ -53,7 +53,7 @@ import {
 import { specularFrom } from '../js/view3d/surface.js';
 import { makeNoise3, ridged3 } from '../js/view3d/noise.js';
 import {
-  PEAK_MESHES, SCALE_RANGE, peakPlacements, cloudBands,
+  PEAK_MESHES, SCALE_RANGE, peakPlacements, cloudBands, silhouetteMass,
 } from '../js/view3d/peak-plan.js';
 import {
   TERRAIN, TARN, SHORE, terrainField, terrainHeight, crestAt,
@@ -2755,6 +2755,27 @@ section('Stage 4 — six rocks, and no cones');
 
   check('each carries 2–4 shelves', PEAK_MESHES.every((m) => m.shelves >= 2 && m.shelves <= 4));
 
+  check('every blank is reshaped into a mountain mass before surface noise', PEAK_MESHES.every((m) => (
+    m.silhouette && m.silhouette.base >= 0.3 && m.silhouette.shoulder > 0
+    && m.silhouette.waist > 0 && m.silhouette.asym > 0
+    && Array.isArray(m.silhouette.drift) && m.silhouette.drift.length === 2
+  )));
+
+  check('mass shaping redistributes the authored envelope instead of widening it', (() => (
+    PEAK_MESHES.every((m) => {
+      let max = 0;
+      let min = Infinity;
+      for (let row = 0; row <= 64; row++) {
+        for (let side = 0; side < 36; side++) {
+          const mass = silhouetteMass(m.silhouette, row / 64, side / 36 * Math.PI * 2);
+          max = Math.max(max, mass);
+          min = Math.min(min, mass);
+        }
+      }
+      return max <= 1 + 1e-9 && max > 0.97 && min > 0.35 && max - min > 0.15;
+    })
+  ))());
+
   check('the top profiles are varied, and the set covers the brief', (() => {
     const tops = PEAK_MESHES.map((m) => m.top);
     return tops.includes('plateau') && tops.includes('saddle')
@@ -2779,8 +2800,12 @@ section('Stage 4 — six rocks, and no cones');
     // A displacement that is a pure function of the *position* gives the
     // duplicates the same answer; anything that reached for a vertex index
     // would tear the mesh open along the seam and at both caps.
-    /pos\.setXYZ\(i, x \* rs, y, z \* rs \* squash\)/.test(src)
+    /pos\.setXYZ\(i, x \* rs \* mass \+ dx, y, z \* rs \* mass \* squash \+ dz\)/.test(src)
     && /const r = Math\.hypot\(x, z\)/.test(src)
+  ))());
+
+  check('cap centres follow the same drift as their rim', (() => (
+    /if \(r < 1e-5\) \{[\s\S]*?pos\.setXYZ\(i, dx, y, dz\)/.test(src)
   ))());
 
   check('a radius may never cross the axis', (() => (
